@@ -1,0 +1,13 @@
+/target/
+/models/
+/model-pack/
+/output/
+*.wav
+*.onnx
+*.ckpt
+*.pth
+*.safetensors
+*.npz
+*.pt
+*.bin
+*.validation.json
