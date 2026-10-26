@@ -16,6 +16,7 @@
   内的 GRU 推理代码。
 - 支持若干数字、日期、时间、金额、百分比和温度格式的文本规范化。
 - 默认使用 CPU；Windows 可显式选择实验性的 DirectML 后端。
+- CUDA/TensorRT 的 GPT 路径保留 CPU 前端和声码器。另有 R1.2 文档说明的实验性流式 VITS CUDA EP 路径。GPT Step 始终禁止 CPU 回退；Encoder 默认严格放置，只有显式诊断模式才允许审计过的 CPU 辅助节点。
 - 模型包带有匹配的 ABI-1 流式图时，可启用 token 流式合成。
 - 在 ONNX 图运行之间协作式响应取消。
 
@@ -38,6 +39,19 @@ cargo run --release --example synthesize -- ./model-pack "你好，今天我们�
 ```powershell
 cargo run --release --example synthesize -- ./model-pack "Hello, Alice." ./output.wav directml
 ```
+
+CUDA 与 TensorRT EP 需要分别启用 Cargo feature；目前仅供实验，且需要与 ORT
+匹配的 CUDA/TensorRT 运行库：
+
+```powershell
+cargo run --release --features r1-cuda-ep --example synthesize -- ./model-pack "你好。" ./output.wav cuda
+cargo run --release --features r1-tensorrt-ep --example synthesize -- ./model-pack "你好。" ./output.wav tensor_rt
+```
+
+R1.1 CUDA GPT + CPU VITS 路径已在本机单一模型上通过性能及逐采样点音频一致性检查，但仍保持可选；
+TensorRT 因缺少运行库而受阻。初始审计见 [R1.0 GPU 后端记录](docs/performance-r1-gpu.md)，
+CUDA 1.30 运行时、常驻 KV Cache 与热态基准见 [R1.1 报告](docs/performance-r1.1.md)。
+流式 VITS CUDA EP 的独立对照见 [R1.2 报告](docs/performance-r1.2.md)；该路径需要显式允许已审计的 CPU 辅助节点，默认仍使用 CPU VITS。
 
 若要在指定毫秒数后取消，先传入后端，再传时长：
 

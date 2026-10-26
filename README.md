@@ -19,6 +19,10 @@ are not included here.
 - Number, date, time, currency, percentage, and temperature normalization for
   supported display forms.
 - CPU by default; DirectML is available on Windows as an experimental backend.
+- The CUDA/TensorRT GPT path keeps the frontend and vocoder on CPU. A separate,
+  experimental streaming VITS CUDA EP path is documented in R1.2. GPT Step
+  fails to load if any node would fall back to CPU; Encoder CPU helpers require
+  an explicit diagnostic opt-in.
 - Optional token streaming when the model pack contains the matching ABI-1
   streaming graph.
 - Cooperative cancellation between ONNX graph runs.
@@ -43,6 +47,22 @@ On Windows, select DirectML explicitly:
 ```powershell
 cargo run --release --example synthesize -- ./model-pack "Hello, Alice." ./output.wav directml
 ```
+
+CUDA and TensorRT EPs are opt-in Cargo features and require compatible ORT plus
+CUDA/TensorRT runtime libraries:
+
+```powershell
+cargo run --release --features r1-cuda-ep --example synthesize -- ./model-pack "Hello." ./output.wav cuda
+cargo run --release --features r1-tensorrt-ep --example synthesize -- ./model-pack "Hello." ./output.wav tensor_rt
+```
+
+The R1.1 CUDA GPT + CPU VITS path passed performance and bit-identical audio
+checks on one local host and remains opt-in; TensorRT is blocked on a missing runtime. See the [historical
+R1.0 GPU audit](docs/performance-r1-gpu.md) and the [R1.1 CUDA runtime and
+benchmark report](docs/performance-r1.1.md).
+An opt-in streaming VITS CUDA EP experiment is measured separately in the
+[R1.2 report](docs/performance-r1.2.md); it requires explicit CPU fallback for
+the audited VITS helper nodes and does not change the default CPU VITS path.
 
 To cancel after a number of milliseconds, pass the backend first and duration second:
 

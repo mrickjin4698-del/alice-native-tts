@@ -11,6 +11,12 @@ categories = ["multimedia::audio"]
 [workspace]
 resolver = "2"
 
+[features]
+r0-profiling = []
+r1-gpt-step-v2 = []
+r1-cuda-ep = ["ort/cuda", "ort/load-dynamic"]
+r1-tensorrt-ep = ["r1-cuda-ep", "ort/tensorrt"]
+
 [dependencies]
 ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
@@ -22,6 +28,22 @@ regex = "1"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[example]]
+name = "r0_profile"
+required-features = ["r0-profiling"]
+
+[[example]]
+name = "r1_3_profile"
+required-features = ["r0-profiling", "r1-cuda-ep"]
+
+[[example]]
+name = "r1_4_profile"
+required-features = ["r0-profiling", "r1-cuda-ep"]
+
+[[example]]
+name = "cuda_smoke"
+required-features = ["r1-cuda-ep"]
 
 [target.'cfg(windows)'.dependencies]
 ort = { version = "=2.0.0-rc.12", features = ["directml"] }

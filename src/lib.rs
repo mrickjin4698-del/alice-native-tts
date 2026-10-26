@@ -3,9 +3,12 @@
 mod audio;
 mod frontend;
 mod inference;
+pub mod profiling;
 mod streaming;
 pub use frontend::normalize::normalize as normalize_text;
 pub use inference::{ChunkInfo, NativeTts, SynthesisTimings};
+#[cfg(feature = "r0-profiling")]
+pub use profiling::{AllocationSnapshot, PhaseAllocation, PhaseTiming, ProfilePhase, R0Timings};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -64,14 +67,20 @@ pub struct Config {
     pub streaming: bool,
 }
 
-/// CPU remains the portable default. DirectML accelerates the frontend and
-/// vocoder; autoregressive GPT and reference extraction stay on CPU.
+/// CPU remains the portable default. DirectML keeps GPT on CPU. The opt-in
+/// CUDA/TensorRT R1 backends target GPT Encoder and GPT Step; frontend and
+/// vocoder sessions remain explicitly on CPU. Unsupported GPT nodes fail
+/// instead of silently falling back to the CPU EP.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Backend {
     #[default]
     Cpu,
     Directml,
+    #[cfg(feature = "r1-cuda-ep")]
+    Cuda,
+    #[cfg(feature = "r1-tensorrt-ep")]
+    TensorRt,
 }
 
 #[derive(Deserialize)]

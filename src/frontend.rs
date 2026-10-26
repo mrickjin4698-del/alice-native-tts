@@ -1,6 +1,7 @@
 pub mod normalize;
 use normalize::normalize;
 mod pinyin;
+use crate::profiling::{ProfileCollector, ProfilePhase};
 use crate::{
     check,
     inference::{open_on, tf, ti},
@@ -8,8 +9,123 @@ use crate::{
 };
 use ort::session::Session;
 use serde::Deserialize;
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, VecDeque},
+    path::Path,
+};
 use tokenizers::Tokenizer;
+
+const FRONTEND_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const FRONTEND_CACHE_MAX_ENTRIES: usize = 32;
+const FRONTEND_CACHE_SCHEMA: u8 = 1;
+
+struct FrontendCacheEntry {
+    phones: Vec<i64>,
+    features: Vec<f32>,
+    bytes: usize,
+}
+
+struct G2pwBatchInputs {
+    count: usize,
+    len: usize,
+    positions: Vec<usize>,
+    input_ids: Vec<i64>,
+    token_type_ids: Vec<i64>,
+    attention_mask: Vec<i64>,
+    phoneme_mask: Vec<f32>,
+    char_ids: Vec<i64>,
+    position_ids: Vec<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum FrontendLanguageRoute {
+    Chinese,
+    English,
+    Mixed,
+    Empty,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct FrontendCacheConfig {
+    schema: u8,
+    g2pw_batch_size: usize,
+    g2pw_backend: u8,
+    bert_backend: u8,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct FrontendCacheKey {
+    normalized_text: String,
+    language_route: FrontendLanguageRoute,
+    config: FrontendCacheConfig,
+}
+
+fn frontend_graph_backend(name: &str, fallback: Backend) -> Result<Backend> {
+    let Some(value) = std::env::var(name).ok() else {
+        return Ok(fallback);
+    };
+    match value.as_str() {
+        "cpu" => Ok(Backend::Cpu),
+        "directml" => Ok(Backend::Directml),
+        "cuda" => {
+            #[cfg(feature = "r1-cuda-ep")]
+            {
+                Ok(Backend::Cuda)
+            }
+            #[cfg(not(feature = "r1-cuda-ep"))]
+            {
+                Err(invalid(format!(
+                    "{name}=cuda requires the r1-cuda-ep feature"
+                )))
+            }
+        }
+        "tensor_rt" => {
+            #[cfg(feature = "r1-tensorrt-ep")]
+            {
+                Ok(Backend::TensorRt)
+            }
+            #[cfg(not(feature = "r1-tensorrt-ep"))]
+            {
+                Err(invalid(format!(
+                    "{name}=tensor_rt requires the r1-tensorrt-ep feature"
+                )))
+            }
+        }
+        _ => Err(invalid(format!(
+            "{name} must be cpu, directml, cuda, or tensor_rt"
+        ))),
+    }
+}
+
+fn backend_cache_tag(backend: Backend) -> u8 {
+    match backend {
+        Backend::Cpu => 0,
+        Backend::Directml => 1,
+        #[cfg(feature = "r1-cuda-ep")]
+        Backend::Cuda => 2,
+        #[cfg(feature = "r1-tensorrt-ep")]
+        Backend::TensorRt => 3,
+    }
+}
+
+fn frontend_language_route(text: &str) -> FrontendLanguageRoute {
+    let has_chinese = text.chars().any(is_han);
+    let has_english = text.chars().any(|ch| ch.is_ascii_alphabetic());
+    match (has_chinese, has_english) {
+        (true, true) => FrontendLanguageRoute::Mixed,
+        (true, false) => FrontendLanguageRoute::Chinese,
+        (false, true) => FrontendLanguageRoute::English,
+        (false, false) => FrontendLanguageRoute::Empty,
+    }
+}
+
+fn frontend_cache_key(normalized_text: &str, config: FrontendCacheConfig) -> FrontendCacheKey {
+    FrontendCacheKey {
+        language_route: frontend_language_route(normalized_text),
+        normalized_text: normalized_text.to_owned(),
+        config,
+    }
+}
 
 #[derive(Deserialize)]
 struct Mono {
@@ -48,6 +164,14 @@ pub(crate) struct Frontend {
     symbols: HashMap<String, i64>,
     cmu: HashMap<String, Vec<String>>,
     english: EnglishModel,
+    frontend_cache_enabled: bool,
+    frontend_cache_force_miss: bool,
+    frontend_cache: HashMap<FrontendCacheKey, FrontendCacheEntry>,
+    frontend_cache_lru: VecDeque<FrontendCacheKey>,
+    frontend_cache_bytes: usize,
+    g2pw_batch_size: usize,
+    cache_config: FrontendCacheConfig,
+    parallel_frontend: bool,
 }
 
 impl Frontend {
@@ -83,9 +207,27 @@ impl Frontend {
         if english.phonemes.len() != 74 {
             return Err(invalid("invalid English phoneme vocabulary"));
         }
+        let g2pw_batch_size = std::env::var("ALICE_NATIVE_TTS_G2PW_BATCH_SIZE")
+            .ok()
+            .map(|value| {
+                value
+                    .parse::<usize>()
+                    .map_err(|_| invalid("ALICE_NATIVE_TTS_G2PW_BATCH_SIZE must be an integer"))
+            })
+            .transpose()?
+            .unwrap_or(4);
+        if !(1..=64).contains(&g2pw_batch_size) {
+            return Err(invalid(
+                "ALICE_NATIVE_TTS_G2PW_BATCH_SIZE must be between 1 and 64",
+            ));
+        }
+        let g2pw_backend =
+            frontend_graph_backend("ALICE_NATIVE_TTS_FRONTEND_G2PW_BACKEND", backend)?;
+        let bert_backend =
+            frontend_graph_backend("ALICE_NATIVE_TTS_FRONTEND_BERT_BACKEND", backend)?;
         Ok(Self {
-            bert: open_on(dir, "bert", backend)?,
-            g2pw: open_on(dir, "g2pw", backend)?,
+            bert: open_on(dir, "bert", bert_backend)?,
+            g2pw: open_on(dir, "g2pw", g2pw_backend)?,
             tokenizer: Tokenizer::from_bytes(include_bytes!("frontend/g2pw_tokenizer.json"))
                 .map_err(|e| invalid(e.to_string()))?,
             mono: serde_json::from_str(include_str!("frontend/dict_mono_chars.json"))?,
@@ -94,7 +236,37 @@ impl Frontend {
             cmu: serde_json::from_slice(&std::fs::read(dir.join("cmudict.json"))?)?,
             symbols,
             english,
+            frontend_cache_enabled: std::env::var("ALICE_NATIVE_TTS_FRONTEND_CACHE")
+                .ok()
+                .as_deref()
+                != Some("0"),
+            frontend_cache_force_miss: std::env::var("ALICE_NATIVE_TTS_FRONTEND_CACHE_FORCE_MISS")
+                .ok()
+                .as_deref()
+                == Some("1"),
+            frontend_cache: HashMap::new(),
+            frontend_cache_lru: VecDeque::new(),
+            frontend_cache_bytes: 0,
+            g2pw_batch_size,
+            cache_config: FrontendCacheConfig {
+                schema: FRONTEND_CACHE_SCHEMA,
+                g2pw_batch_size,
+                g2pw_backend: backend_cache_tag(g2pw_backend),
+                bert_backend: backend_cache_tag(bert_backend),
+            },
+            parallel_frontend: std::env::var("ALICE_NATIVE_TTS_FRONTEND_PARALLEL")
+                .ok()
+                .as_deref()
+                == Some("1"),
         })
+    }
+
+    #[cfg(feature = "r0-profiling")]
+    pub(crate) fn finish_ort_profiling(&mut self) -> Result<Vec<std::path::PathBuf>> {
+        Ok(vec![
+            self.bert.end_profiling()?.into(),
+            self.g2pw.end_profiling()?.into(),
+        ])
     }
 
     fn phone(&self, s: &str) -> Result<i64> {
@@ -104,61 +276,101 @@ impl Frontend {
             .ok_or_else(|| invalid(format!("unsupported phoneme: {s}")))
     }
 
-    fn chinese(&mut self, text: &str, cancel: &impl Fn() -> bool) -> Result<(Vec<i64>, Vec<f32>)> {
-        self.chinese_with_batch(text, cancel, 4)
+    fn chinese_profiled(
+        &mut self,
+        text: &str,
+        cancel: &impl Fn() -> bool,
+        profile: &mut ProfileCollector,
+    ) -> Result<(Vec<i64>, Vec<f32>)> {
+        let batch_size = self.g2pw_batch_size;
+        self.chinese_with_batch_profiled(text, cancel, batch_size, profile)
     }
 
+    #[cfg(test)]
     fn chinese_with_batch(
         &mut self,
         text: &str,
         cancel: &impl Fn() -> bool,
         batch_size: usize,
     ) -> Result<(Vec<i64>, Vec<f32>)> {
-        let chars: Vec<char> = text.chars().collect();
-        let encoding = self
-            .tokenizer
-            .encode(text, true)
-            .map_err(|e| invalid(e.to_string()))?;
-        let ids: Vec<i64> = encoding.get_ids().iter().map(|x| i64::from(*x)).collect();
+        let mut profile = ProfileCollector::disabled();
+        self.chinese_with_batch_profiled(text, cancel, batch_size, &mut profile)
+    }
+
+    fn chinese_with_batch_profiled(
+        &mut self,
+        text: &str,
+        cancel: &impl Fn() -> bool,
+        batch_size: usize,
+        profile: &mut ProfileCollector,
+    ) -> Result<(Vec<i64>, Vec<f32>)> {
+        if self.parallel_frontend {
+            return self.chinese_parallel_profiled(text, cancel, batch_size, profile);
+        }
+        let (chars, ids) = profile.measure(ProfilePhase::FrontendTokenizer, || {
+            let chars: Vec<char> = text.chars().collect();
+            let encoding = self
+                .tokenizer
+                .encode(text, true)
+                .map_err(|e| invalid(e.to_string()))?;
+            let ids: Vec<i64> = encoding.get_ids().iter().map(|x| i64::from(*x)).collect();
+            Ok::<_, crate::Error>((chars, ids))
+        })?;
         if ids.len() != chars.len() + 2 {
             return Err(invalid("Chinese tokenizer/character alignment mismatch"));
         }
         let len = ids.len();
-        let mut pinyins: Vec<String> = chars
-            .iter()
-            .map(|ch| {
-                self.mono
-                    .get(ch)
-                    .map_or_else(|| ch.to_string(), |m| m.phone.clone())
-            })
-            .collect();
-        // Bounded batches amortize G2PW's BERT evaluation while keeping
-        // cancellation points between runs. Preserve each query's full context.
-        let queries: Vec<_> = chars
-            .iter()
-            .enumerate()
-            .filter_map(|(i, ch)| self.poly.get(ch).map(|p| (i, p)))
-            .collect();
+        let (mut pinyins, queries) = profile.measure(ProfilePhase::FrontendG2pwPrepare, || {
+            let pinyins = chars
+                .iter()
+                .map(|ch| {
+                    self.mono
+                        .get(ch)
+                        .map_or_else(|| ch.to_string(), |m| m.phone.clone())
+                })
+                .collect::<Vec<_>>();
+            // Own the small dictionary payload so profiling can isolate input
+            // preparation from G2PW execution without holding a self borrow.
+            let queries = chars
+                .iter()
+                .enumerate()
+                .filter_map(|(i, ch)| self.poly.get(ch).map(|p| (i, p.index, p.phones.clone())))
+                .collect::<Vec<_>>();
+            (pinyins, queries)
+        });
         for batch in queries.chunks(batch_size) {
             check(cancel)?;
             let count = batch.len();
-            let mut masks = vec![0.0; count * self.labels.len()];
-            let mut char_ids = Vec::new();
-            let mut positions = Vec::new();
-            for (row, (i, poly)) in batch.iter().enumerate() {
-                for (_, index) in &poly.phones {
-                    masks[row * self.labels.len() + *index] = 1.0;
-                }
-                char_ids.push(poly.index as i64);
-                positions.push((i + 1) as i64);
-            }
-            let out = self.g2pw.run(ort::inputs! {
-                "input_ids" => ti(vec![count,len],ids.repeat(count))?,
-                "token_type_ids" => ti(vec![count,len],vec![0;count * len])?,
-                "attention_mask" => ti(vec![count,len],vec![1;count * len])?,
-                "phoneme_mask" => tf(vec![count,self.labels.len()],masks)?,
-                "char_ids" => ti(vec![count],char_ids)?,
-                "position_ids" => ti(vec![count],positions)?
+            let (input_ids, token_type_ids, attention_mask, phoneme_mask, char_ids, position_ids) =
+                profile.measure(ProfilePhase::FrontendG2pwPrepare, || {
+                    let mut masks = vec![0.0; count * self.labels.len()];
+                    let mut char_ids = Vec::with_capacity(count);
+                    let mut positions = Vec::with_capacity(count);
+                    for (row, (i, poly_index, poly_phones)) in batch.iter().enumerate() {
+                        for (_, index) in poly_phones {
+                            masks[row * self.labels.len() + *index] = 1.0;
+                        }
+                        char_ids.push(*poly_index as i64);
+                        positions.push((i + 1) as i64);
+                    }
+                    Ok::<_, crate::Error>((
+                        ti(vec![count, len], ids.repeat(count))?,
+                        ti(vec![count, len], vec![0; count * len])?,
+                        ti(vec![count, len], vec![1; count * len])?,
+                        tf(vec![count, self.labels.len()], masks)?,
+                        ti(vec![count], char_ids)?,
+                        ti(vec![count], positions)?,
+                    ))
+                })?;
+            let out = profile.measure(ProfilePhase::FrontendG2pwRun, || {
+                self.g2pw.run(ort::inputs! {
+                    "input_ids" => input_ids,
+                    "token_type_ids" => token_type_ids,
+                    "attention_mask" => attention_mask,
+                    "phoneme_mask" => phoneme_mask,
+                    "char_ids" => char_ids,
+                    "position_ids" => position_ids
+                })
             })?;
             let (_, probs) = out
                 .get("probs")
@@ -167,7 +379,7 @@ impl Frontend {
             if probs.len() != count * self.labels.len() || probs.iter().any(|v| !v.is_finite()) {
                 return Err(invalid("invalid G2PW probabilities"));
             }
-            for ((position, _), row) in batch.iter().zip(probs.chunks_exact(self.labels.len())) {
+            for ((position, _, _), row) in batch.iter().zip(probs.chunks_exact(self.labels.len())) {
                 let index = row
                     .iter()
                     .enumerate()
@@ -177,28 +389,42 @@ impl Frontend {
                 pinyins[*position] = self.labels[index].clone();
             }
         }
-        tone_sandhi(&chars, &mut pinyins);
-        let mut phones = Vec::new();
-        let mut word2ph = Vec::new();
-        for p in &pinyins {
-            if p.len() == 1 && is_punctuation(p.chars().next().unwrap()) {
-                phones.push(self.phone(p)?);
-                word2ph.push(1usize);
-            } else {
-                let (initial, final_) = pinyin::split_zh_ph(p);
-                phones.push(self.phone(initial)?);
-                if !final_.is_empty() {
-                    phones.push(self.phone(final_)?);
-                    word2ph.push(2);
+        let (phones, word2ph) = profile.measure(ProfilePhase::FrontendPhonemeMap, || {
+            tone_sandhi(&chars, &mut pinyins);
+            let mut phones = Vec::new();
+            let mut word2ph = Vec::new();
+            for p in &pinyins {
+                if p.len() == 1 && is_punctuation(p.chars().next().unwrap()) {
+                    phones.push(self.phone(p)?);
+                    word2ph.push(1usize);
                 } else {
-                    word2ph.push(1);
+                    let (initial, final_) = pinyin::split_zh_ph(p);
+                    phones.push(self.phone(initial)?);
+                    if !final_.is_empty() {
+                        phones.push(self.phone(final_)?);
+                        word2ph.push(2);
+                    } else {
+                        word2ph.push(1);
+                    }
                 }
             }
-        }
+            Ok::<_, crate::Error>((phones, word2ph))
+        })?;
         check(cancel)?;
-        let out = self.bert.run(ort::inputs! {
-            "input_ids" => ti(vec![1,len],ids)?, "attention_mask" => ti(vec![1,len],vec![1;len])?,
-            "token_type_ids" => ti(vec![1,len],vec![0;len])?
+        let (input_ids, attention_mask, token_type_ids) =
+            profile.measure(ProfilePhase::FrontendBertInput, || {
+                Ok::<_, crate::Error>((
+                    ti(vec![1, len], ids)?,
+                    ti(vec![1, len], vec![1; len])?,
+                    ti(vec![1, len], vec![0; len])?,
+                ))
+            })?;
+        let out = profile.measure(ProfilePhase::FrontendBertRun, || {
+            self.bert.run(ort::inputs! {
+                "input_ids" => input_ids,
+                "attention_mask" => attention_mask,
+                "token_type_ids" => token_type_ids
+            })
         })?;
         let (shape, data) = out
             .get("hidden_states")
@@ -207,17 +433,236 @@ impl Frontend {
         if shape.as_ref() != [1, len as i64, 1024] {
             return Err(invalid("incompatible BERT export"));
         }
-        let n = phones.len();
-        let mut features = vec![0.0; n * 1024];
-        let mut col = 0;
-        for (i, count) in word2ph.iter().enumerate() {
-            for _ in 0..*count {
-                for row in 0..1024 {
-                    features[row * n + col] = data[(i + 1) * 1024 + row];
+        let features = profile.measure(ProfilePhase::FrontendFeatureExpand, || {
+            let n = phones.len();
+            let mut features = vec![0.0; n * 1024];
+            let mut col = 0;
+            for (i, count) in word2ph.iter().enumerate() {
+                for _ in 0..*count {
+                    for row in 0..1024 {
+                        features[row * n + col] = data[(i + 1) * 1024 + row];
+                    }
+                    col += 1;
                 }
-                col += 1;
             }
+            features
+        });
+        Ok((phones, features))
+    }
+
+    fn chinese_parallel_profiled(
+        &mut self,
+        text: &str,
+        cancel: &impl Fn() -> bool,
+        batch_size: usize,
+        profile: &mut ProfileCollector,
+    ) -> Result<(Vec<i64>, Vec<f32>)> {
+        let (chars, ids) = profile.measure(ProfilePhase::FrontendTokenizer, || {
+            let chars: Vec<char> = text.chars().collect();
+            let encoding = self
+                .tokenizer
+                .encode(text, true)
+                .map_err(|e| invalid(e.to_string()))?;
+            let ids: Vec<i64> = encoding.get_ids().iter().map(|x| i64::from(*x)).collect();
+            Ok::<_, crate::Error>((chars, ids))
+        })?;
+        if ids.len() != chars.len() + 2 {
+            return Err(invalid("Chinese tokenizer/character alignment mismatch"));
         }
+        let len = ids.len();
+        let (mut pinyins, queries) = profile.measure(ProfilePhase::FrontendG2pwPrepare, || {
+            let pinyins = chars
+                .iter()
+                .map(|ch| {
+                    self.mono
+                        .get(ch)
+                        .map_or_else(|| ch.to_string(), |m| m.phone.clone())
+                })
+                .collect::<Vec<_>>();
+            let queries = chars
+                .iter()
+                .enumerate()
+                .filter_map(|(i, ch)| self.poly.get(ch).map(|p| (i, p.index, p.phones.clone())))
+                .collect::<Vec<_>>();
+            (pinyins, queries)
+        });
+        let batches = profile.measure(ProfilePhase::FrontendG2pwPrepare, || {
+            queries
+                .chunks(batch_size)
+                .map(|batch| {
+                    let count = batch.len();
+                    let mut phoneme_mask = vec![0.0; count * self.labels.len()];
+                    let mut char_ids = Vec::with_capacity(count);
+                    let mut position_ids = Vec::with_capacity(count);
+                    let mut positions = Vec::with_capacity(count);
+                    for (row, (position, poly_index, poly_phones)) in batch.iter().enumerate() {
+                        for (_, index) in poly_phones {
+                            phoneme_mask[row * self.labels.len() + *index] = 1.0;
+                        }
+                        char_ids.push(*poly_index as i64);
+                        position_ids.push((*position + 1) as i64);
+                        positions.push(*position);
+                    }
+                    G2pwBatchInputs {
+                        count,
+                        len,
+                        positions,
+                        input_ids: ids.repeat(count),
+                        token_type_ids: vec![0; count * len],
+                        attention_mask: vec![1; count * len],
+                        phoneme_mask,
+                        char_ids,
+                        position_ids,
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
+        let (bert_input_ids, bert_attention_mask, bert_token_type_ids) =
+            profile.measure(ProfilePhase::FrontendBertInput, || {
+                Ok::<_, crate::Error>((
+                    ti(vec![1, len], ids)?,
+                    ti(vec![1, len], vec![1; len])?,
+                    ti(vec![1, len], vec![0; len])?,
+                ))
+            })?;
+        check(cancel)?;
+
+        let parallel_started = std::time::Instant::now();
+        let (g2pw_started, g2pw_ended, g2pw_result, bert_started, bert_ended, bert_result) =
+            std::thread::scope(|scope| {
+                let bert_session = &mut self.bert;
+                let bert_handle = scope.spawn(move || {
+                    let started = std::time::Instant::now();
+                    let result = (|| {
+                        let out = bert_session.run(ort::inputs! {
+                            "input_ids" => bert_input_ids,
+                            "attention_mask" => bert_attention_mask,
+                            "token_type_ids" => bert_token_type_ids
+                        })?;
+                        let (shape, data) = out
+                            .get("hidden_states")
+                            .ok_or_else(|| invalid("incompatible BERT output"))?
+                            .try_extract_tensor::<f32>()?;
+                        if shape.as_ref() != [1, len as i64, 1024] {
+                            return Err(invalid("incompatible BERT export"));
+                        }
+                        Ok::<_, crate::Error>(data.to_vec())
+                    })();
+                    (started, std::time::Instant::now(), result)
+                });
+
+                let g2pw_session = &mut self.g2pw;
+                let labels_len = self.labels.len();
+                let g2pw_started = std::time::Instant::now();
+                let mut g2pw_result = Ok(Vec::<(usize, usize)>::new());
+                for batch in batches {
+                    if let Err(error) = check(cancel) {
+                        g2pw_result = Err(error);
+                        break;
+                    }
+                    let result = (|| {
+                        let out = g2pw_session.run(ort::inputs! {
+                            "input_ids" => ti(vec![batch.count, batch.len], batch.input_ids)?,
+                            "token_type_ids" => ti(vec![batch.count, batch.len], batch.token_type_ids)?,
+                            "attention_mask" => ti(vec![batch.count, batch.len], batch.attention_mask)?,
+                            "phoneme_mask" => tf(vec![batch.count, labels_len], batch.phoneme_mask)?,
+                            "char_ids" => ti(vec![batch.count], batch.char_ids)?,
+                            "position_ids" => ti(vec![batch.count], batch.position_ids)?
+                        })?;
+                        let (_, probs) = out
+                            .get("probs")
+                            .ok_or_else(|| invalid("incompatible G2PW output"))?
+                            .try_extract_tensor::<f32>()?;
+                        if probs.len() != batch.count * labels_len
+                            || probs.iter().any(|value| !value.is_finite())
+                        {
+                            return Err(invalid("invalid G2PW probabilities"));
+                        }
+                        let choices = batch
+                            .positions
+                            .iter()
+                            .zip(probs.chunks_exact(labels_len))
+                            .map(|(position, row)| {
+                                let index = row
+                                    .iter()
+                                    .enumerate()
+                                    .max_by(|a, b| a.1.total_cmp(b.1))
+                                    .map_or(0, |(index, _)| index);
+                                (*position, index)
+                            })
+                            .collect::<Vec<_>>();
+                        Ok::<_, crate::Error>(choices)
+                    })();
+                    match result {
+                        Ok(choices) => g2pw_result.as_mut().unwrap().extend(choices),
+                        Err(error) => {
+                            g2pw_result = Err(error);
+                            break;
+                        }
+                    }
+                }
+                let g2pw_ended = std::time::Instant::now();
+                let (bert_started, bert_ended, bert_result) = bert_handle
+                    .join()
+                    .map_err(|_| invalid("parallel BERT worker panicked"))?;
+                Ok::<_, crate::Error>((
+                    g2pw_started,
+                    g2pw_ended,
+                    g2pw_result,
+                    bert_started,
+                    bert_ended,
+                    bert_result,
+                ))
+            })?;
+        let parallel_ended = std::time::Instant::now();
+        profile.record_external_event(ProfilePhase::FrontendG2pwRun, g2pw_started, g2pw_ended);
+        profile.record_external_event(ProfilePhase::FrontendBertRun, bert_started, bert_ended);
+        profile.record_external_event(
+            ProfilePhase::FrontendParallelRun,
+            parallel_started,
+            parallel_ended,
+        );
+        let g2pw_choices = g2pw_result?;
+        let bert_features = bert_result?;
+        check(cancel)?;
+        for (position, index) in g2pw_choices {
+            pinyins[position] = self.labels[index].clone();
+        }
+        let (phones, word2ph) = profile.measure(ProfilePhase::FrontendPhonemeMap, || {
+            tone_sandhi(&chars, &mut pinyins);
+            let mut phones = Vec::new();
+            let mut word2ph = Vec::new();
+            for pinyin in &pinyins {
+                if pinyin.len() == 1 && is_punctuation(pinyin.chars().next().unwrap()) {
+                    phones.push(self.phone(pinyin)?);
+                    word2ph.push(1usize);
+                } else {
+                    let (initial, final_) = pinyin::split_zh_ph(pinyin);
+                    phones.push(self.phone(initial)?);
+                    if !final_.is_empty() {
+                        phones.push(self.phone(final_)?);
+                        word2ph.push(2);
+                    } else {
+                        word2ph.push(1);
+                    }
+                }
+            }
+            Ok::<_, crate::Error>((phones, word2ph))
+        })?;
+        let features = profile.measure(ProfilePhase::FrontendFeatureExpand, || {
+            let n = phones.len();
+            let mut features = vec![0.0; n * 1024];
+            let mut col = 0;
+            for (i, count) in word2ph.iter().enumerate() {
+                for _ in 0..*count {
+                    for row in 0..1024 {
+                        features[row * n + col] = bert_features[(i + 1) * 1024 + row];
+                    }
+                    col += 1;
+                }
+            }
+            features
+        });
         Ok((phones, features))
     }
 
@@ -256,53 +701,148 @@ impl Frontend {
         text: &str,
         cancel: &impl Fn() -> bool,
     ) -> Result<(Vec<i64>, Vec<f32>)> {
-        let normalized = normalize(text);
-        let mut pieces: Vec<(bool, String)> = Vec::new();
-        for ch in normalized.chars() {
-            let zh = is_han(ch);
-            if zh || ch.is_ascii_alphabetic() {
-                if pieces.last().is_none_or(|p| p.0 != zh) {
-                    pieces.push((zh, String::new()));
+        let mut profile = ProfileCollector::disabled();
+        self.process_profiled(text, cancel, &mut profile)
+    }
+
+    pub(crate) fn process_profiled(
+        &mut self,
+        text: &str,
+        cancel: &impl Fn() -> bool,
+        profile: &mut ProfileCollector,
+    ) -> Result<(Vec<i64>, Vec<f32>)> {
+        let normalized = profile.measure(ProfilePhase::FrontendNormalize, || normalize(text));
+        let key = frontend_cache_key(&normalized, self.cache_config);
+        if self.frontend_cache_enabled {
+            let cached = profile.measure(ProfilePhase::FrontendCacheLookup, || {
+                if self.frontend_cache_force_miss {
+                    self.frontend_cache.clear();
+                    self.frontend_cache_lru.clear();
+                    self.frontend_cache_bytes = 0;
                 }
-            } else if ch.is_whitespace() {
-                if let Some((false, s)) = pieces.last_mut() {
-                    s.push(' ');
-                }
-                continue;
-            } else if !is_punctuation(ch) && ch != '\'' {
-                return Err(invalid(format!("unsupported character: {ch}")));
+                self.frontend_cache_get(&key)
+            });
+            if let Some(output) = cached {
+                check(cancel)?;
+                profile.record_frontend_cache_hit();
+                return Ok(output);
             }
-            if let Some((_, s)) = pieces.last_mut() {
-                s.push(ch);
+            profile.record_frontend_cache_miss();
+        }
+        let output = self.process_normalized_profiled(&normalized, cancel, profile)?;
+        if self.frontend_cache_enabled {
+            profile.measure(ProfilePhase::FrontendCacheStore, || {
+                self.frontend_cache_insert(&key, &output.0, &output.1)
+            });
+        }
+        Ok(output)
+    }
+
+    fn frontend_cache_get(&mut self, key: &FrontendCacheKey) -> Option<(Vec<i64>, Vec<f32>)> {
+        let (phones, features) = {
+            let entry = self.frontend_cache.get(key)?;
+            (entry.phones.clone(), entry.features.clone())
+        };
+        self.frontend_cache_lru.retain(|existing| existing != key);
+        self.frontend_cache_lru.push_back(key.clone());
+        Some((phones, features))
+    }
+
+    fn frontend_cache_insert(&mut self, key: &FrontendCacheKey, phones: &[i64], features: &[f32]) {
+        let bytes = phones
+            .len()
+            .saturating_mul(std::mem::size_of::<i64>())
+            .saturating_add(features.len().saturating_mul(std::mem::size_of::<f32>()))
+            .saturating_add(key.normalized_text.len())
+            .saturating_add(std::mem::size_of::<FrontendCacheConfig>());
+        if bytes > FRONTEND_CACHE_MAX_BYTES {
+            return;
+        }
+        if let Some(previous) = self.frontend_cache.remove(key) {
+            self.frontend_cache_bytes = self.frontend_cache_bytes.saturating_sub(previous.bytes);
+        }
+        self.frontend_cache_lru.retain(|existing| existing != key);
+        while self.frontend_cache_bytes.saturating_add(bytes) > FRONTEND_CACHE_MAX_BYTES
+            || self.frontend_cache.len() >= FRONTEND_CACHE_MAX_ENTRIES
+        {
+            let Some(oldest) = self.frontend_cache_lru.pop_front() else {
+                break;
+            };
+            if let Some(removed) = self.frontend_cache.remove(&oldest) {
+                self.frontend_cache_bytes = self.frontend_cache_bytes.saturating_sub(removed.bytes);
             }
         }
+        self.frontend_cache.insert(
+            key.clone(),
+            FrontendCacheEntry {
+                phones: phones.to_vec(),
+                features: features.to_vec(),
+                bytes,
+            },
+        );
+        self.frontend_cache_lru.push_back(key.clone());
+        self.frontend_cache_bytes = self.frontend_cache_bytes.saturating_add(bytes);
+    }
+
+    fn process_normalized_profiled(
+        &mut self,
+        normalized: &str,
+        cancel: &impl Fn() -> bool,
+        profile: &mut ProfileCollector,
+    ) -> Result<(Vec<i64>, Vec<f32>)> {
+        let pieces = profile.measure(ProfilePhase::FrontendRouting, || {
+            let mut pieces: Vec<(bool, String)> = Vec::new();
+            for ch in normalized.chars() {
+                let zh = is_han(ch);
+                if zh || ch.is_ascii_alphabetic() {
+                    if pieces.last().is_none_or(|p| p.0 != zh) {
+                        pieces.push((zh, String::new()));
+                    }
+                } else if ch.is_whitespace() {
+                    if let Some((false, s)) = pieces.last_mut() {
+                        s.push(' ');
+                    }
+                    continue;
+                } else if !is_punctuation(ch) && ch != '\'' {
+                    return Err(invalid(format!("unsupported character: {ch}")));
+                }
+                if let Some((_, s)) = pieces.last_mut() {
+                    s.push(ch);
+                }
+            }
+            Ok::<_, crate::Error>(pieces)
+        })?;
         let mut segments = Vec::new();
         for (zh, s) in pieces {
             check(cancel)?;
             let segment = if zh {
-                self.chinese(&s, cancel)?
+                self.chinese_profiled(&s, cancel, profile)?
             } else {
-                self.english(&s, cancel)?
+                profile.measure(ProfilePhase::FrontendEnglishG2p, || {
+                    self.english(&s, cancel)
+                })?
             };
             if !segment.0.is_empty() {
                 segments.push(segment);
             }
         }
-        let n: usize = segments.iter().map(|s| s.0.len()).sum();
-        if n == 0 {
-            return Err(invalid("text produced no phonemes"));
-        }
-        let mut phones = Vec::with_capacity(n);
-        let mut features = vec![0.0; n * 1024];
-        for (ph, bert) in segments {
-            let offset = phones.len();
-            for row in 0..1024 {
-                features[row * n + offset..row * n + offset + ph.len()]
-                    .copy_from_slice(&bert[row * ph.len()..(row + 1) * ph.len()]);
+        profile.measure(ProfilePhase::FrontendJoin, || {
+            let n: usize = segments.iter().map(|s| s.0.len()).sum();
+            if n == 0 {
+                return Err(invalid("text produced no phonemes"));
             }
-            phones.extend(ph);
-        }
-        Ok((phones, features))
+            let mut phones = Vec::with_capacity(n);
+            let mut features = vec![0.0; n * 1024];
+            for (ph, bert) in segments {
+                let offset = phones.len();
+                for row in 0..1024 {
+                    features[row * n + offset..row * n + offset + ph.len()]
+                        .copy_from_slice(&bert[row * ph.len()..(row + 1) * ph.len()]);
+                }
+                phones.extend(ph);
+            }
+            Ok((phones, features))
+        })
     }
 }
 
@@ -542,6 +1082,122 @@ mod tests {
             let (batch, batch_bert) = frontend.chinese_with_batch(text, &|| false, 4).unwrap();
             assert_eq!(scalar, batch);
             assert_eq!(scalar_bert, batch_bert);
+            let mut profile = ProfileCollector::disabled();
+            let (parallel, parallel_bert) = frontend
+                .chinese_parallel_profiled(text, &|| false, 4, &mut profile)
+                .unwrap();
+            assert_eq!(scalar, parallel);
+            assert_eq!(scalar_bert, parallel_bert);
+        }
+    }
+    #[test]
+    fn frontend_cache_key_covers_route_and_execution_configuration() {
+        let config = FrontendCacheConfig {
+            schema: FRONTEND_CACHE_SCHEMA,
+            g2pw_batch_size: 4,
+            g2pw_backend: 0,
+            bert_backend: 0,
+        };
+        assert_eq!(
+            frontend_language_route("行长来了"),
+            FrontendLanguageRoute::Chinese
+        );
+        assert_eq!(
+            frontend_language_route("Hello Alice"),
+            FrontendLanguageRoute::English
+        );
+        assert_eq!(
+            frontend_language_route("你好 Alice"),
+            FrontendLanguageRoute::Mixed
+        );
+        let base = frontend_cache_key("你好 Alice", config);
+        let different_batch = frontend_cache_key(
+            "你好 Alice",
+            FrontendCacheConfig {
+                g2pw_batch_size: 8,
+                ..config
+            },
+        );
+        let different_provider = frontend_cache_key(
+            "你好 Alice",
+            FrontendCacheConfig {
+                g2pw_backend: 2,
+                ..config
+            },
+        );
+        let different_bert_provider = frontend_cache_key(
+            "你好 Alice",
+            FrontendCacheConfig {
+                bert_backend: 2,
+                ..config
+            },
+        );
+        let different_schema = frontend_cache_key(
+            "你好 Alice",
+            FrontendCacheConfig {
+                schema: config.schema.wrapping_add(1),
+                ..config
+            },
+        );
+        assert_ne!(base, different_batch);
+        assert_ne!(base, different_provider);
+        assert_ne!(base, different_bert_provider);
+        assert_ne!(base, different_schema);
+        assert_ne!(base, frontend_cache_key("Hello Alice", config));
+    }
+
+    #[cfg(feature = "r1-cuda-ep")]
+    #[test]
+    #[ignore = "requires ALICE_NATIVE_TTS_TEST_PACK and the configured CUDA ORT runtime"]
+    fn cuda_frontend_matches_cpu_phones_and_bert_features() {
+        let pack = std::env::var("ALICE_NATIVE_TTS_TEST_PACK").unwrap();
+        std::env::set_var("ALICE_NATIVE_TTS_FRONTEND_CACHE", "0");
+        std::env::set_var("ALICE_NATIVE_TTS_FRONTEND_PARALLEL", "0");
+        std::env::set_var("ALICE_NATIVE_TTS_FRONTEND_CUDA_DIAGNOSTIC_ALLOW_CPU", "1");
+
+        let load = |g2pw: &str, bert: &str| {
+            std::env::set_var("ALICE_NATIVE_TTS_FRONTEND_G2PW_BACKEND", g2pw);
+            std::env::set_var("ALICE_NATIVE_TTS_FRONTEND_BERT_BACKEND", bert);
+            Frontend::load(Path::new(&pack), Backend::Cpu).unwrap()
+        };
+        let mut cpu = load("cpu", "cpu");
+        let texts = ["重庆的银行今天有十二个人.", "行长在重庆重看长长的乐章."];
+        let mut cpu_outputs = Vec::new();
+        for text in texts {
+            let mut profile = ProfileCollector::disabled();
+            cpu_outputs.push(cpu.chinese_profiled(text, &|| false, &mut profile).unwrap());
+        }
+        drop(cpu);
+
+        for (g2pw_backend, bert_backend) in [("cuda", "cpu"), ("cpu", "cuda"), ("cuda", "cuda")] {
+            let mut candidate = load(g2pw_backend, bert_backend);
+            for (text, (expected_phones, expected_features)) in texts.iter().zip(&cpu_outputs) {
+                let mut profile = ProfileCollector::disabled();
+                let (phones, features) = candidate
+                    .chinese_profiled(text, &|| false, &mut profile)
+                    .unwrap();
+                assert_eq!(
+                    &phones, expected_phones,
+                    "phones differ: {g2pw_backend}/{bert_backend}"
+                );
+                assert_eq!(features.len(), expected_features.len());
+                let max_abs = features
+                    .iter()
+                    .zip(expected_features)
+                    .map(|(actual, expected)| (actual - expected).abs())
+                    .fold(0.0f32, f32::max);
+                let mse = features
+                    .iter()
+                    .zip(expected_features)
+                    .map(|(actual, expected)| (actual - expected).powi(2))
+                    .sum::<f32>()
+                    / features.len().max(1) as f32;
+                eprintln!(
+                    "frontend {g2pw_backend}/{bert_backend}: feature_max_abs={max_abs:.8}, rmse={:.8}",
+                    mse.sqrt()
+                );
+                assert!(max_abs <= 1e-3, "BERT feature drift too high: {max_abs}");
+            }
         }
     }
     #[test]

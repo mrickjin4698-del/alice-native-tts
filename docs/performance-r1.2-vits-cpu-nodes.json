@@ -1,0 +1,3439 @@
+{
+  "runtime": "ONNX Runtime 1.30.0 CUDA Execution Provider, Windows x64",
+  "session": "sovits_stream",
+  "selection": "CUDA EP with explicit CPU diagnostic fallback enabled",
+  "provider_node_counts": {
+    "CPUExecutionProvider": 570,
+    "CUDAExecutionProvider": 1515
+  },
+  "provider_node_execution_events": {
+    "CPUExecutionProvider": 3990,
+    "CUDAExecutionProvider": 10605
+  },
+  "cpu_assigned_unique_node_count": 570,
+  "cpu_assigned_node_event_count": 3990,
+  "cpu_primary_compute_node_count": 0,
+  "cpu_nodes": [
+    {
+      "event_count": 7,
+      "node": "/Cast_1",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/Unsqueeze_7",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.0/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.1/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder2/attn_layers.2/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.0/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.1/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_ssl/attn_layers.2/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.0/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.1/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.2/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.3/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.4/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Add_2",
+      "operator": "Add",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Cast_2",
+      "operator": "Cast",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Concat_11",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Concat_12",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Concat_14",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Concat_15",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Concat_5",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Concat_8",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Concat_9",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Gather_10",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Gather_5",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Gather_6",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Gather_7",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Gather_8",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Gather_9",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Mul",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Mul_2",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Mul_3",
+      "operator": "Mul",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Sub",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Sub_2",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Sub_3",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Sub_4",
+      "operator": "Sub",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_15",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_16",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_17",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_18",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_19",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_20",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_24",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_30",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_31",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_32",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_33",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_35",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_36",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/encoder_text/attn_layers.5/Unsqueeze_37",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/mrte/cross_attention/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/mrte/cross_attention/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/mrte/cross_attention/Concat_3",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/mrte/cross_attention/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/mrte/cross_attention/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/mrte/cross_attention/Gather_2",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/mrte/cross_attention/Gather_3",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/mrte/cross_attention/Unsqueeze_3",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/mrte/cross_attention/Unsqueeze_6",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/mrte/cross_attention/Unsqueeze_7",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/mrte/cross_attention/Unsqueeze_8",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/Concat",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/Equal_1",
+      "operator": "Equal",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/Reshape",
+      "operator": "Reshape",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/Unsqueeze_1",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/Where",
+      "operator": "Where",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/slf_attn/Concat_1",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/slf_attn/Concat_4",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/slf_attn/Concat_6",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/slf_attn/Concat_7",
+      "operator": "Concat",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/slf_attn/Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/slf_attn/Gather_1",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/slf_attn/Tile",
+      "operator": "Tile",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/slf_attn/Unsqueeze_11",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "/ref_enc/slf_attn/Unsqueeze_12",
+      "operator": "Unsqueeze",
+      "provider": "CPUExecutionProvider"
+    },
+    {
+      "event_count": 7,
+      "node": "Gather",
+      "operator": "Gather",
+      "provider": "CPUExecutionProvider"
+    }
+  ],
+  "profile_file": "target/r1.2-cuda-vits-profile-final\\ort-profile\\sovits_stream-2_2026-10-26_10-22-25_467.json"
+}

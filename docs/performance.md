@@ -1,5 +1,16 @@
 # Performance notes
 
+The native streaming R0 operator profile, chunk-size sweep, and cache
+before/after measurements captured on 2026-10-10 are in
+[the R0 profiling report](performance-r0.md), and the [R1 GPT Step profiling report](performance-r1.md).
+The optional CUDA/TensorRT GPT backend audit and its runtime limitations are in
+[the historical R1.0 GPU report](performance-r1-gpu.md); the verified CUDA
+backend and resident KV cache results are in [the R1.1 report](performance-r1.1.md).
+The opt-in streaming VITS CUDA EP comparison, CPU node placement, and DirectML
+runtime blocker are in [the R1.2 report](performance-r1.2.md).
+The first-audio timeline, frontend cache, and first-chunk threshold sweep are in
+[the R1.3 report](performance-r1.3.md).
+
 These numbers are an engineering snapshot captured on 2026-10-03. They are not
 a repeatable cross-platform benchmark and should not be read as a speed promise.
 The current implementation has not had a systematic quantization, weight
