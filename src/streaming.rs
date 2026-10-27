@@ -22,6 +22,40 @@ const CHANNELS: usize = 192;
 const SAMPLES_PER_TOKEN: usize = 1280;
 const OVERLAP_TOKENS: usize = 2;
 const OVERLAP_SAMPLES: usize = OVERLAP_TOKENS * SAMPLES_PER_TOKEN;
+const PREVIEW_MIN_PCM_SAMPLES: usize = 2_048; // 64 ms at 32 kHz
+const PREVIEW_SILENCE_PEAK: f32 = 1e-5;
+const SOLA_MIN_CORRELATION: f64 = 0.20;
+const BOUNDED_JOIN_MIN_CORRELATION: f64 = 0.70;
+const BOUNDED_JOIN_MIN_RMS_FLOOR: f64 = 1e-4;
+const BOUNDED_JOIN_RELATIVE_RMS: f64 = 0.10;
+const R1_9_VOICE_RMS_THRESHOLD: f64 = 1e-3;
+const BOUNDED_JOIN_SEARCH_SAMPLES: usize = 320;
+const BOUNDED_JOIN_COARSE_STEP: usize = 16;
+const BOUNDED_JOIN_BOUNDARY_STEP: usize = 320;
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct BoundedPreviewJoin {
+    pub(crate) preview_boundary_samples: usize,
+    pub(crate) refill_start_samples: usize,
+    pub(crate) correlation: f64,
+    pub(crate) preview_rms: f64,
+    pub(crate) refill_rms: f64,
+    pub(crate) minimum_rms_gate: f64,
+    pub(crate) accepted: bool,
+    pub(crate) fallback_reason: Option<&'static str>,
+    pub(crate) seam_start_jump: Option<f64>,
+    pub(crate) seam_end_jump: Option<f64>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct SolaAlignment {
+    pub(crate) best_offset_samples: usize,
+    pub(crate) applied_offset_samples: usize,
+    pub(crate) correlation: f64,
+    pub(crate) previous_rms: f64,
+    pub(crate) incoming_rms: f64,
+    pub(crate) fallback_reason: Option<&'static str>,
+}
 
 #[derive(Default)]
 pub(crate) struct StreamDecoder {
@@ -32,6 +66,8 @@ pub(crate) struct StreamDecoder {
     text_seq: Option<Tensor<i64>>,
     #[cfg(feature = "r1-cuda-ep")]
     cuda_io_binding: Option<IoBinding>,
+    preview_refill_mode: bool,
+    last_sola_alignment: Option<SolaAlignment>,
 }
 
 #[cfg(feature = "r1-cuda-ep")]
@@ -122,6 +158,26 @@ fn measure_profiled<T>(
 }
 
 impl StreamDecoder {
+    pub(crate) fn enable_preview_refill_mode(&mut self) {
+        self.preview_refill_mode = true;
+    }
+
+    pub(crate) fn reset_unemitted_preview(&mut self) {
+        self.latent.clear();
+        self.latent_frames = 0;
+        self.tokens = 0;
+        self.tail.clear();
+        self.last_sola_alignment = None;
+    }
+
+    pub(crate) fn take_sola_alignment(&mut self) -> Option<SolaAlignment> {
+        self.last_sola_alignment.take()
+    }
+
+    pub(crate) fn pending_audio_tail(&self) -> &[f32] {
+        &self.tail
+    }
+
     pub fn decode(
         &mut self,
         session: &mut Session,
@@ -134,6 +190,7 @@ impl StreamDecoder {
         cancel: &impl Fn() -> bool,
         profile: &mut ProfileCollector,
     ) -> Result<Vec<f32>> {
+        self.last_sola_alignment = None;
         check(cancel)?;
         let added = tokens
             .len()
@@ -373,7 +430,13 @@ impl StreamDecoder {
         let audio = profile.measure(ProfilePhase::Sola, || {
             let mut audio = audio;
             if !self.tail.is_empty() {
-                audio = sola(&self.tail, &audio);
+                if self.preview_refill_mode {
+                    let (stitched, alignment) = sola_preview_refill(&self.tail, &audio);
+                    self.last_sola_alignment = Some(alignment);
+                    audio = stitched;
+                } else {
+                    audio = sola(&self.tail, &audio);
+                }
             }
             self.tail.clear();
             if !final_chunk {
@@ -409,12 +472,304 @@ fn sola(tail: &[f32], audio: &[f32]) -> Vec<f32> {
             offset = candidate;
         }
     }
+    crossfade_at_offset(tail, audio, offset)
+}
+
+fn sola_with_alignment(tail: &[f32], audio: &[f32]) -> (Vec<f32>, SolaAlignment) {
+    let overlap = tail.len();
+    let search = 320.min(audio.len().saturating_sub(overlap));
+    let mut best = f64::NEG_INFINITY;
+    let mut offset = 0;
+    let tail_energy: f64 = tail.iter().map(|x| f64::from(*x).powi(2)).sum();
+    let mut candidate_energy = 0.0;
+    for candidate in 0..=search {
+        let segment = &audio[candidate..candidate + overlap];
+        let dot: f64 = tail
+            .iter()
+            .zip(segment)
+            .map(|(a, b)| f64::from(*a) * f64::from(*b))
+            .sum();
+        let energy: f64 = segment.iter().map(|x| f64::from(*x).powi(2)).sum();
+        let score = dot / (energy + 1e-8).sqrt();
+        if score > best {
+            best = score;
+            offset = candidate;
+            candidate_energy = energy;
+        }
+    }
+    let correlation = best_cosine(tail_energy, candidate_energy, best, tail.len());
+    let alignment = SolaAlignment {
+        best_offset_samples: offset,
+        applied_offset_samples: offset,
+        correlation,
+        previous_rms: rms_from_energy(tail_energy, tail.len()),
+        incoming_rms: rms_from_energy(candidate_energy, overlap),
+        fallback_reason: None,
+    };
+    (crossfade_at_offset(tail, audio, offset), alignment)
+}
+
+fn sola_preview_refill(tail: &[f32], audio: &[f32]) -> (Vec<f32>, SolaAlignment) {
+    let (legacy_audio, mut alignment) = sola_with_alignment(tail, audio);
+    let fallback_reason = if alignment.previous_rms < f64::from(PREVIEW_SILENCE_PEAK)
+        && alignment.incoming_rms < f64::from(PREVIEW_SILENCE_PEAK)
+    {
+        Some("both_overlap_windows_silent")
+    } else if alignment.previous_rms < f64::from(PREVIEW_SILENCE_PEAK)
+        || alignment.incoming_rms < f64::from(PREVIEW_SILENCE_PEAK)
+    {
+        Some("one_overlap_window_silent")
+    } else if !alignment.correlation.is_finite() || alignment.correlation < SOLA_MIN_CORRELATION {
+        Some("low_waveform_correlation")
+    } else {
+        None
+    };
+    if let Some(reason) = fallback_reason {
+        alignment.applied_offset_samples = 0;
+        alignment.fallback_reason = Some(reason);
+        (crossfade_at_offset(tail, audio, 0), alignment)
+    } else {
+        (legacy_audio, alignment)
+    }
+}
+
+fn crossfade_at_offset(tail: &[f32], audio: &[f32], offset: usize) -> Vec<f32> {
+    let overlap = tail.len();
+    if offset.saturating_add(overlap) > audio.len() {
+        return Vec::new();
+    }
     let mut result = audio[offset..].to_vec();
     for (i, previous) in tail.iter().enumerate() {
         let weight = 0.5 - 0.5 * (std::f64::consts::PI * i as f64 / overlap as f64).cos();
         result[i] = (weight * f64::from(result[i]) + (1.0 - weight) * f64::from(*previous)) as f32;
     }
     result
+}
+
+fn best_cosine(tail_energy: f64, candidate_energy: f64, legacy_score: f64, len: usize) -> f64 {
+    if tail_energy <= 0.0 || candidate_energy <= 0.0 || len == 0 {
+        return 0.0;
+    }
+    // The legacy score is dot / sqrt(candidate_energy + eps). Recover its dot
+    // product and normalize both windows only for diagnostics/preview gating.
+    let dot = legacy_score * (candidate_energy + 1e-8).sqrt();
+    dot / (tail_energy * candidate_energy).sqrt()
+}
+
+fn rms_from_energy(energy: f64, len: usize) -> f64 {
+    if len == 0 {
+        0.0
+    } else {
+        (energy / len as f64).sqrt()
+    }
+}
+
+pub(crate) fn preview_fallback_reason(audio: &[f32]) -> Option<&'static str> {
+    if audio.len() < PREVIEW_MIN_PCM_SAMPLES {
+        return Some("preview_pcm_below_64ms");
+    }
+    if audio
+        .iter()
+        .fold(0.0f32, |peak, sample| peak.max(sample.abs()))
+        < PREVIEW_SILENCE_PEAK
+    {
+        return Some("preview_pcm_silent");
+    }
+    None
+}
+
+pub(crate) fn first_voice_sample(audio: &[f32]) -> Option<usize> {
+    let frames = audio
+        .chunks(320)
+        .map(|frame| {
+            rms_from_energy(
+                frame.iter().map(|sample| f64::from(*sample).powi(2)).sum(),
+                frame.len(),
+            )
+        })
+        .collect::<Vec<_>>();
+    frames
+        .windows(2)
+        .position(|pair| pair[0] >= R1_9_VOICE_RMS_THRESHOLD && pair[1] >= R1_9_VOICE_RMS_THRESHOLD)
+        .map(|index| index * 320)
+}
+
+/// Find a high-confidence join entirely inside audio that has not yet been
+/// committed. A missing or weak match is reported to the caller; it must not
+/// be converted into a zero-offset crossfade.
+pub(crate) fn find_bounded_preview_join(
+    preview: &[f32],
+    refill: &[f32],
+    committed_samples: usize,
+) -> Option<BoundedPreviewJoin> {
+    let overlap = OVERLAP_SAMPLES.min(preview.len()).min(refill.len());
+    if overlap < OVERLAP_SAMPLES || committed_samples.saturating_add(overlap) > preview.len() {
+        return None;
+    }
+    let first_boundary = committed_samples + overlap;
+    let last_boundary = preview.len().min(refill.len());
+    if first_boundary > last_boundary {
+        return None;
+    }
+    let committed_peak_frame_rms = preview[..committed_samples]
+        .chunks(320)
+        .map(|frame| {
+            rms_from_energy(
+                frame.iter().map(|sample| f64::from(*sample).powi(2)).sum(),
+                frame.len(),
+            )
+        })
+        .fold(0.0, f64::max);
+    let minimum_rms_gate =
+        (committed_peak_frame_rms * BOUNDED_JOIN_RELATIVE_RMS).max(BOUNDED_JOIN_MIN_RMS_FLOOR);
+
+    let mut best_signal: Option<BoundedPreviewJoin> = None;
+    let mut best_any: Option<BoundedPreviewJoin> = None;
+    let mut boundary = first_boundary;
+    while boundary <= last_boundary {
+        let preview_start = boundary - overlap;
+        let search_start = preview_start.saturating_sub(BOUNDED_JOIN_SEARCH_SAMPLES);
+        let search_end = preview_start
+            .saturating_add(BOUNDED_JOIN_SEARCH_SAMPLES)
+            .min(refill.len() - overlap);
+        let mut coarse_signal: Option<(usize, f64, f64, f64)> = None;
+        let mut coarse_any: Option<(usize, f64, f64, f64)> = None;
+        let mut candidate = search_start;
+        while candidate <= search_end {
+            let (correlation, preview_rms, refill_rms) = compare_windows(
+                &preview[preview_start..boundary],
+                &refill[candidate..candidate + overlap],
+            );
+            let item = (candidate, correlation, preview_rms, refill_rms);
+            if coarse_any
+                .as_ref()
+                .map_or(true, |(_, score, _, _)| correlation > *score)
+            {
+                coarse_any = Some(item);
+            }
+            if preview_rms >= minimum_rms_gate
+                && refill_rms >= minimum_rms_gate
+                && coarse_signal
+                    .as_ref()
+                    .map_or(true, |(_, score, _, _)| correlation > *score)
+            {
+                coarse_signal = Some(item);
+            }
+            candidate = candidate.saturating_add(BOUNDED_JOIN_COARSE_STEP);
+        }
+
+        for coarse_offset in [
+            coarse_signal.map(|(offset, _, _, _)| offset),
+            coarse_any.map(|(offset, _, _, _)| offset),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let refine_start = coarse_offset.saturating_sub(BOUNDED_JOIN_COARSE_STEP);
+            let refine_end = coarse_offset
+                .saturating_add(BOUNDED_JOIN_COARSE_STEP)
+                .min(search_end);
+            for candidate in refine_start.max(search_start)..=refine_end {
+                let (correlation, preview_rms, refill_rms) = compare_windows(
+                    &preview[preview_start..boundary],
+                    &refill[candidate..candidate + overlap],
+                );
+                let has_signal = preview_rms >= minimum_rms_gate && refill_rms >= minimum_rms_gate;
+                let replace = |best: &mut Option<BoundedPreviewJoin>| {
+                    if best
+                        .as_ref()
+                        .map_or(true, |current| correlation > current.correlation)
+                    {
+                        let accepted = has_signal && correlation >= BOUNDED_JOIN_MIN_CORRELATION;
+                        *best = Some(BoundedPreviewJoin {
+                            preview_boundary_samples: boundary,
+                            refill_start_samples: candidate,
+                            correlation,
+                            preview_rms,
+                            refill_rms,
+                            minimum_rms_gate,
+                            accepted,
+                            fallback_reason: if accepted {
+                                None
+                            } else if !has_signal {
+                                Some("alignment_window_below_minimum_rms")
+                            } else {
+                                Some("no_high_confidence_alignment")
+                            },
+                            seam_start_jump: None,
+                            seam_end_jump: None,
+                        });
+                    }
+                };
+                replace(&mut best_any);
+                if has_signal {
+                    replace(&mut best_signal);
+                }
+            }
+        }
+
+        if let Some(join) = best_signal.as_ref().filter(|join| join.accepted) {
+            return Some(join.clone());
+        }
+        boundary = boundary.saturating_add(BOUNDED_JOIN_BOUNDARY_STEP);
+    }
+    best_signal.or(best_any)
+}
+
+pub(crate) fn stitch_bounded_preview(
+    preview: &[f32],
+    refill: &[f32],
+    committed_samples: usize,
+    join: &mut BoundedPreviewJoin,
+) -> Vec<f32> {
+    let overlap_start = join
+        .preview_boundary_samples
+        .saturating_sub(OVERLAP_SAMPLES);
+    let mut output = preview[committed_samples..overlap_start].to_vec();
+    let overlap = crossfade_at_offset(
+        &preview[overlap_start..join.preview_boundary_samples],
+        refill,
+        join.refill_start_samples,
+    );
+    join.seam_start_jump = output
+        .last()
+        .or_else(|| {
+            committed_samples
+                .checked_sub(1)
+                .and_then(|index| preview.get(index))
+        })
+        .zip(overlap.first())
+        .map(|(before, after)| f64::from((*before - *after).abs()));
+    join.seam_end_jump = overlap
+        .get(OVERLAP_SAMPLES - 1)
+        .zip(refill.get(join.refill_start_samples + OVERLAP_SAMPLES))
+        .map(|(before, after)| f64::from((*before - *after).abs()));
+    output.extend(overlap);
+    output
+}
+
+fn compare_windows(left: &[f32], right: &[f32]) -> (f64, f64, f64) {
+    if left.len() != right.len() || left.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    let mut dot = 0.0f64;
+    let mut left_energy = 0.0f64;
+    let mut right_energy = 0.0f64;
+    for (left, right) in left.iter().zip(right) {
+        let left = f64::from(*left);
+        let right = f64::from(*right);
+        dot += left * right;
+        left_energy += left * left;
+        right_energy += right * right;
+    }
+    let left_rms = rms_from_energy(left_energy, left.len());
+    let right_rms = rms_from_energy(right_energy, right.len());
+    let correlation = if left_energy > 0.0 && right_energy > 0.0 {
+        dot / (left_energy * right_energy).sqrt()
+    } else {
+        0.0
+    };
+    (correlation, left_rms, right_rms)
 }
 
 #[cfg(test)]
@@ -447,5 +802,103 @@ mod tests {
     fn silent_overlap_uses_zero_offset_and_remains_finite() {
         let joined = sola(&vec![0.0; 2560], &vec![0.0; 3840]);
         assert_eq!(joined, vec![0.0; 3840]);
+    }
+
+    #[test]
+    fn preview_fallback_rejects_short_and_silent_pcm() {
+        assert_eq!(
+            preview_fallback_reason(&vec![0.1; 2047]),
+            Some("preview_pcm_below_64ms")
+        );
+        assert_eq!(
+            preview_fallback_reason(&vec![0.0; 4096]),
+            Some("preview_pcm_silent")
+        );
+        assert_eq!(preview_fallback_reason(&vec![0.1; 4096]), None);
+    }
+
+    #[test]
+    fn preview_sola_uses_zero_offset_when_overlap_match_is_weak() {
+        let tail: Vec<f32> = (0..2560)
+            .map(|index| (index as f32 * 0.171).sin())
+            .collect();
+        let unrelated: Vec<f32> = (0..3840)
+            .map(|index| (index as f32 * 0.113).cos() * 0.1)
+            .collect();
+        let (joined, alignment) = sola_preview_refill(&tail, &unrelated);
+        assert!(alignment.correlation < SOLA_MIN_CORRELATION);
+        assert_eq!(alignment.applied_offset_samples, 0);
+        assert_eq!(alignment.fallback_reason, Some("low_waveform_correlation"));
+        assert_eq!(joined.len(), unrelated.len());
+        assert!(joined.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn bounded_preview_join_rejects_unrelated_audio_without_zero_offset_fallback() {
+        let preview = (0..24_000)
+            .map(|index| ((index as f32) * 0.017).sin())
+            .collect::<Vec<_>>();
+        let refill = (0..32_000)
+            .map(|index| ((index as f32) * 0.031).cos())
+            .collect::<Vec<_>>();
+        let join = find_bounded_preview_join(&preview, &refill, 4_000).unwrap();
+        assert!(!join.accepted);
+        assert_eq!(join.fallback_reason, Some("no_high_confidence_alignment"));
+    }
+
+    #[test]
+    fn bounded_preview_join_finds_same_timeline_audio() {
+        let preview = (0..24_000)
+            .map(|index| {
+                let time = index as f32;
+                (time * 0.017).sin() * 0.6 + (time * 0.0031).cos() * 0.4
+            })
+            .collect::<Vec<_>>();
+        let mut refill = vec![0.0; 32_000];
+        refill[300..(300 + preview.len())].copy_from_slice(&preview);
+        let mut join = find_bounded_preview_join(&preview, &refill, 4_000).unwrap();
+        assert!(join.accepted, "{join:?}");
+        assert!(join.correlation >= BOUNDED_JOIN_MIN_CORRELATION);
+        assert!(
+            join.refill_start_samples
+                .abs_diff(join.preview_boundary_samples - OVERLAP_SAMPLES)
+                <= BOUNDED_JOIN_SEARCH_SAMPLES
+        );
+        let stitched = stitch_bounded_preview(&preview, &refill, 4_000, &mut join);
+        assert!(!stitched.is_empty());
+        assert!(join.seam_start_jump.unwrap() < 0.01, "{join:?}");
+        let end_sample = join.refill_start_samples + OVERLAP_SAMPLES;
+        let expected_end_jump = f64::from((refill[end_sample - 1] - refill[end_sample]).abs());
+        let actual_end_jump = join.seam_end_jump.unwrap();
+        assert!(
+            (actual_end_jump - expected_end_jump).abs() < 1e-4,
+            "{join:?}; expected={expected_end_jump}; actual={actual_end_jump}"
+        );
+    }
+
+    #[test]
+    fn bounded_preview_join_rejects_correlated_but_inaudible_windows() {
+        let preview = (0..24_000)
+            .map(|index| ((index as f32) * 0.017).sin() * 1e-5)
+            .collect::<Vec<_>>();
+        let mut refill = vec![0.0; 32_000];
+        refill[300..(300 + preview.len())].copy_from_slice(&preview);
+        let join = find_bounded_preview_join(&preview, &refill, 4_000).unwrap();
+        assert!(join.correlation > 0.99, "{join:?}");
+        assert!(join.preview_rms < join.minimum_rms_gate, "{join:?}");
+        assert_eq!(
+            join.fallback_reason,
+            Some("alignment_window_below_minimum_rms")
+        );
+        assert!(!join.accepted);
+    }
+
+    #[test]
+    fn first_voice_sample_uses_ten_millisecond_rms_windows() {
+        let mut audio = vec![0.0; 640];
+        audio.extend(std::iter::repeat_n(0.1, 640));
+        assert_eq!(first_voice_sample(&audio), Some(640));
+        assert_eq!(first_voice_sample(&vec![0.0; 3_200]), None);
+        assert_eq!(first_voice_sample(&vec![1e-4; 3_200]), None);
     }
 }

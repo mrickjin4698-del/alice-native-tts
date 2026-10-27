@@ -81,7 +81,7 @@ const TEXT: &str = "今天我们测试第二版语音，后面的内容会继续
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
     if args.len() < 4 {
-        return Err("usage: r0_profile PACK OUTPUT_DIR cpu|directml|cuda|tensor_rt [--chunks=8,16,24,32] [--repeats=20] [--warmups=1] [--ort-profile] [--cuda-vits] [--cuda-vits-allow-cpu] [--gpu-diagnostic-allow-cpu]".into());
+        return Err("usage: r0_profile PACK OUTPUT_DIR cpu|directml|cuda|tensor_rt|tensor_rt_native [--chunks=8,16,24,32] [--repeats=20] [--warmups=1] [--ort-profile] [--cuda-vits] [--cuda-vits-allow-cpu] [--gpu-diagnostic-allow-cpu]".into());
     }
     let pack = PathBuf::from(&args[1]);
     let output = PathBuf::from(&args[2]);
@@ -139,8 +139,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("GPU diagnostic mode: audited Encoder helper nodes and VITS nodes may run on CPU; GPT Step remains strict CUDA-only.");
     }
     if cuda_vits {
-        if !matches!(args[3].as_str(), "cuda") {
-            return Err("--cuda-vits requires the cuda backend".into());
+        if !matches!(args[3].as_str(), "cuda" | "tensor_rt_native") {
+            return Err("--cuda-vits requires the cuda or tensor_rt_native backend".into());
         }
         std::env::set_var("ALICE_NATIVE_TTS_CUDA_VITS", "1");
     }
@@ -160,7 +160,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .as_deref()
             == Some("1");
     let backend_value = serde_json::to_value(backend)?;
-    let has_gpu_gpt_backend = matches!(backend_value.as_str(), Some("cuda" | "tensor_rt"));
+    let ort_cuda_gpt = matches!(backend_value.as_str(), Some("cuda" | "tensor_rt"));
+    #[cfg(feature = "r2-trt-native")]
+    let native_trt_gpt = backend == Backend::TensorRtNative;
+    #[cfg(not(feature = "r2-trt-native"))]
+    let native_trt_gpt = false;
+    let has_gpu_gpt_backend = ort_cuda_gpt || native_trt_gpt;
+    let gpt_execution_backend = if native_trt_gpt {
+        "native_tensorrt_11"
+    } else if ort_cuda_gpt {
+        "ort_cuda_execution_provider"
+    } else {
+        "cpu"
+    };
     if ort_profile {
         std::env::set_var(
             "ALICE_NATIVE_TTS_ORT_PROFILE_DIR",
@@ -267,6 +279,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "model_load_ms": load_ms,
             "warmup_runs": if ort_profile { 0 } else { warmups },
             "gpt_step_graph": step_graph,
+            "gpt_execution_backend": gpt_execution_backend,
+            "gpt_kv_cache_storage": if native_trt_gpt { "native_cuda_ping_pong" } else if ort_cuda_gpt { "ort_cuda_io_binding" } else { "host" },
             "gpt_step_intra_threads": gpt_step_threads,
             "gpu_diagnostic_allow_cpu": gpu_diagnostic_allow_cpu,
             "cuda_vits_requested": cuda_vits,
@@ -291,8 +305,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "allocation_probe_is_excluded_from_latency_samples": true,
                 "rust_allocator_does_not_include_onnx_runtime_native_c_allocations": true,
                 "audio_output_is_raw_little_endian_f32": true,
-                "cuda_cache_residency_is_asserted_each_step": has_gpu_gpt_backend,
-                "cuda_cache_copy_measurement_scope": "K/V endpoint memory placement and strict GPT Step node placement; ORT internal device-to-device copies are not byte-counted"
+                "gpu_kv_cache_residency_is_asserted_each_step": ort_cuda_gpt,
+                "native_trt_kv_cache_device_roundtrip_bytes_per_token": if native_trt_gpt { Some(0usize) } else { None },
+                "gpu_cache_copy_measurement_scope": if native_trt_gpt { "native TensorRT keeps K/V in two cudaMalloc buffers; only top-k logits and IDs return to the CPU sampler" } else { "ORT CUDA endpoint memory placement is checked; internal device-to-device copies are not byte-counted" }
             }
         });
         fs::write(
@@ -326,6 +341,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let final_report = json!({
         "backend": backend,
         "gpt_step_graph": step_graph,
+        "gpt_execution_backend": gpt_execution_backend,
+        "gpt_kv_cache_storage": if native_trt_gpt { "native_cuda_ping_pong" } else if ort_cuda_gpt { "ort_cuda_io_binding" } else { "host" },
         "gpt_step_intra_threads": gpt_step_threads,
         "gpu_diagnostic_allow_cpu": gpu_diagnostic_allow_cpu,
         "cuda_vits_requested": cuda_vits,
@@ -830,5 +847,7 @@ fn backend_name(backend: Backend) -> &'static str {
         Backend::Cuda => "cuda",
         #[cfg(feature = "r1-tensorrt-ep")]
         Backend::TensorRt => "tensor_rt",
+        #[cfg(feature = "r2-trt-native")]
+        Backend::TensorRtNative => "tensor_rt_native",
     }
 }

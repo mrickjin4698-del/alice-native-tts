@@ -29,6 +29,7 @@ dependencies = [
 name = "alice-native-tts"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "hound",
  "ort",
  "regex",

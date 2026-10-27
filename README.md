@@ -19,10 +19,11 @@ are not included here.
 - Number, date, time, currency, percentage, and temperature normalization for
   supported display forms.
 - CPU by default; DirectML is available on Windows as an experimental backend.
-- The CUDA/TensorRT GPT path keeps the frontend and vocoder on CPU. A separate,
-  experimental streaming VITS CUDA EP path is documented in R1.2. GPT Step
-  fails to load if any node would fall back to CPU; Encoder CPU helpers require
-  an explicit diagnostic opt-in.
+- The CUDA/TensorRT EP GPT path keeps the frontend and vocoder on CPU. A separate,
+  experimental streaming VITS CUDA EP path is documented in R1.2. The optional
+  native TensorRT 11 GPT backend is Windows x64-only and feature-gated; it keeps
+  K/V cache on the GPU and retains CPU sampling. The two TensorRT routes use
+  different runtime APIs.
 - Optional token streaming when the model pack contains the matching ABI-1
   streaming graph.
 - Cooperative cancellation between ONNX graph runs.
@@ -57,12 +58,41 @@ cargo run --release --features r1-tensorrt-ep --example synthesize -- ./model-pa
 ```
 
 The R1.1 CUDA GPT + CPU VITS path passed performance and bit-identical audio
-checks on one local host and remains opt-in; TensorRT is blocked on a missing runtime. See the [historical
+checks on one local host and remains opt-in. The ORT TensorRT EP still requires
+its own matching runtime; it is separate from native TensorRT 11. See the [historical
 R1.0 GPU audit](docs/performance-r1-gpu.md) and the [R1.1 CUDA runtime and
 benchmark report](docs/performance-r1.1.md).
 An opt-in streaming VITS CUDA EP experiment is measured separately in the
 [R1.2 report](docs/performance-r1.2.md); it requires explicit CPU fallback for
 the audited VITS helper nodes and does not change the default CPU VITS path.
+
+### Native TensorRT 11 GPT (Windows x64)
+
+This backend is experimental and is not the ORT TensorRT EP. Build it with the
+TensorRT 11 SDK, CUDA runtime/NVCC headers, and a matching ONNX Runtime DLL
+available locally:
+
+```powershell
+$env:ALICE_TRT_HOME = "C:\path\to\TensorRT-11.2.1.2"
+$env:ALICE_CUDA_HOME = "C:\path\to\cuda_cudart-windows-x86_64-12.9.79-archive"
+$env:ALICE_CUDA_NVCC_HOME = "C:\path\to\cuda_nvcc-windows-x86_64-12.9.86-archive"
+$env:ORT_DYLIB_PATH = "C:\path\to\onnxruntime.dll"
+# Add TensorRT, CUDA runtime and cuBLAS bin directories to PATH.
+cargo run --release --features r2-trt-native --example synthesize -- ./model-pack "Hello." ./output.wav tensor_rt_native
+```
+
+The measured configuration and full reproduction notes are in the
+[R2.1 performance report](docs/performance-r2.1.md). TensorRT 11 GPT inference
+remains opt-in; CPU and DirectML defaults are unchanged.
+
+An optional native TensorRT GPT + ORT CUDA VITS combination is available for
+local benchmarking with the `r2-trt-native-cuda-vits` feature. It requires the
+same native TensorRT SDK/runtime plus an ORT CUDA DLL and its CUDA dependencies.
+Enable it explicitly with `--cuda-vits`; `--cuda-vits-allow-cpu` permits the
+audited VITS helper/shape nodes to stay on CPU. The default backend is unchanged,
+and the mixed route is still experimental pending listening and playback
+validation. See the [R2.2 report](docs/performance-r2.2.md) for measured
+results and the observed execution-provider node split.
 
 To cancel after a number of milliseconds, pass the backend first and duration second:
 

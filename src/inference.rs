@@ -1,9 +1,14 @@
+#[cfg(feature = "r2-trt-native")]
+use crate::native_trt::NativeTrtGpt;
 use crate::{
     audio, check,
     frontend::Frontend,
     invalid,
     profiling::{ProfileCollector, ProfilePhase},
-    streaming::{StreamDecoder, CHUNK_TOKENS},
+    streaming::{
+        find_bounded_preview_join, first_voice_sample, preview_fallback_reason,
+        stitch_bounded_preview, BoundedPreviewJoin, SolaAlignment, StreamDecoder, CHUNK_TOKENS,
+    },
     validate_pack, validate_streaming_pack, Backend, Config, Pack, Result,
 };
 #[cfg(feature = "r1-cuda-ep")]
@@ -11,7 +16,7 @@ use ort::value::DynTensorValueType;
 #[cfg(feature = "r1-cuda-ep")]
 use ort::{
     memory::{AllocationDevice, AllocatorType, MemoryInfo, MemoryType},
-    session::IoBinding,
+    session::{IoBinding, RunOptions},
 };
 use ort::{
     session::{Session, SessionInputValue},
@@ -24,6 +29,54 @@ use std::{
     time::Instant,
 };
 
+const R1_9_MAX_VOICE_ONSET_MS: usize = 160;
+const R1_9_MIN_COMMIT_MS: usize = 64;
+const R1_9_MAX_COMMIT_MS: usize = 240;
+
+#[cfg(feature = "r2-0-first-audible")]
+struct LoadTrace {
+    name: &'static str,
+    started: Option<Instant>,
+}
+
+#[cfg(feature = "r2-0-first-audible")]
+impl LoadTrace {
+    fn begin(name: &'static str) -> Self {
+        let enabled = std::env::var("ALICE_NATIVE_TTS_LOAD_TRACE").ok().as_deref() == Some("1");
+        if enabled {
+            eprintln!("[alice-native-tts load] BEGIN {name}");
+        }
+        Self {
+            name,
+            started: enabled.then(Instant::now),
+        }
+    }
+}
+
+#[cfg(feature = "r2-0-first-audible")]
+impl Drop for LoadTrace {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            eprintln!(
+                "[alice-native-tts load] END {} elapsed_ms={:.1}",
+                self.name,
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+}
+
+#[cfg(not(feature = "r2-0-first-audible"))]
+struct LoadTrace;
+
+#[cfg(not(feature = "r2-0-first-audible"))]
+impl LoadTrace {
+    #[inline(always)]
+    fn begin(_name: &'static str) -> Self {
+        Self
+    }
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct SynthesisTimings {
     pub frontend_ms: f64,
@@ -32,6 +85,30 @@ pub struct SynthesisTimings {
     pub semantic_tokens: usize,
     pub first_audio_tokens: usize,
     pub audio_chunks: usize,
+}
+
+#[derive(Default, serde::Serialize)]
+struct PreviewRefillDiagnostics {
+    preview_tokens: Option<usize>,
+    refill_target_tokens: Option<usize>,
+    preview_callback_tokens: Option<usize>,
+    preview_fallback_reason: Option<&'static str>,
+    preview_decoded_samples: Option<usize>,
+    preview_committed_samples: Option<usize>,
+    preview_uncommitted_samples: Option<usize>,
+    preview_voice_onset_samples: Option<usize>,
+    bounded_join: Option<BoundedPreviewJoin>,
+    refill_rejected_reason: Option<&'static str>,
+    full_prefix_refill: bool,
+    semantic_tokens: usize,
+    semantic_token_hash: u64,
+    sola_alignments: Vec<SolaAlignment>,
+}
+
+#[derive(Clone, Debug)]
+struct BoundedPreviewState {
+    decoded_pcm: Vec<f32>,
+    committed_samples: usize,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
@@ -58,10 +135,23 @@ enum GptKvCache {
         value: DynValue,
         next_binding: usize,
     },
+    #[allow(dead_code)]
+    CudaV2Initial {
+        key: DynValue,
+        value: DynValue,
+    },
+    #[allow(dead_code)]
+    CudaV2PerLayer {
+        key: Vec<DynValue>,
+        value: Vec<DynValue>,
+        next_binding: usize,
+    },
     V2PerLayer {
         key: Vec<DynValue>,
         value: Vec<DynValue>,
     },
+    #[cfg(feature = "r2-trt-native")]
+    TensorRtNative,
 }
 
 const GPT_STEP_CACHE_LAYERS: usize = 24;
@@ -80,6 +170,25 @@ pub(crate) fn open_on(dir: &Path, name: &str, backend: Backend) -> Result<Sessio
 }
 
 fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
+    let _load_trace = match name {
+        "bert" => Some(LoadTrace::begin("session:bert")),
+        "g2pw" => Some(LoadTrace::begin("session:g2pw")),
+        "ssl" => Some(LoadTrace::begin("session:ssl")),
+        "vq_encoder" => Some(LoadTrace::begin("session:vq_encoder")),
+        "spectrogram" => Some(LoadTrace::begin("session:spectrogram")),
+        "sv_embedding" => Some(LoadTrace::begin("session:sv_embedding")),
+        "gpt_encoder" => Some(LoadTrace::begin("session:gpt_encoder")),
+        "gpt_step" => Some(LoadTrace::begin("session:gpt_step")),
+        "gpt_step_init_v2" => Some(LoadTrace::begin("session:gpt_step_init_v2")),
+        "sovits" => Some(LoadTrace::begin("session:sovits")),
+        "sovits_stream" => Some(LoadTrace::begin("session:sovits_stream")),
+        _ => None,
+    };
+    #[cfg(feature = "r2-0-first-audible")]
+    if std::env::var("ALICE_NATIVE_TTS_LOAD_TRACE").ok().as_deref() == Some("1") {
+        let bytes = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        eprintln!("[alice-native-tts load] SESSION name={name} backend={backend:?} bytes={bytes}");
+    }
     #[allow(unused_mut)]
     let mut strict_gpu_placement = false;
     #[allow(unused_variables)]
@@ -106,7 +215,7 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
             // The ABI-1 encoder graph has a small number of audited CPU helper nodes.
             // Keep that diagnostic escape hatch isolated from the autoregressive step.
             "gpt_encoder" => !allow_cpu_nodes_for_gpu_diagnostics,
-            "gpt_step" => true,
+            "gpt_step" | "gpt_step_init_v2" => true,
             "sovits" | "sovits_stream"
                 if std::env::var("ALICE_NATIVE_TTS_CUDA_VITS").ok().as_deref() == Some("1") =>
             {
@@ -120,7 +229,7 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
     if backend == Backend::TensorRt {
         strict_gpu_placement = match name {
             "gpt_encoder" => !allow_cpu_nodes_for_gpu_diagnostics,
-            "gpt_step" => true,
+            "gpt_step" | "gpt_step_init_v2" => true,
             _ => false,
         };
     }
@@ -143,11 +252,39 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
     } else {
         4
     };
-    let mut builder = Session::builder()?
+    let _trace = LoadTrace::begin("ort_session_builder_create");
+    let builder = Session::builder()?;
+    drop(_trace);
+    let _trace = LoadTrace::begin("ort_session_set_intra_threads");
+    let builder = builder
         .with_intra_threads(intra_threads)
-        .map_err(|e| invalid(e.to_string()))?
+        .map_err(|e| invalid(e.to_string()))?;
+    drop(_trace);
+    let _trace = LoadTrace::begin("ort_session_set_inter_threads");
+    let mut builder = builder
         .with_inter_threads(1)
         .map_err(|e| invalid(e.to_string()))?;
+    drop(_trace);
+    #[cfg(feature = "r1-cuda-ep")]
+    if backend == Backend::Cuda
+        && matches!(name, "gpt_step" | "gpt_step_init_v2")
+        && std::env::var("ALICE_NATIVE_TTS_ORT_VERBOSE")
+            .ok()
+            .as_deref()
+            == Some("1")
+    {
+        builder = builder
+            .with_log_level(ort::logging::LogLevel::Verbose)
+            .map_err(|e| invalid(e.to_string()))?
+            .with_log_verbosity(2)
+            .map_err(|e| invalid(e.to_string()))?
+            .with_logger(std::sync::Arc::new(
+                |level, category, id, location, message| {
+                    eprintln!("[ORT {level:?}] {category} [{id}] {location}: {message}");
+                },
+            ))
+            .map_err(|e| invalid(e.to_string()))?;
+    }
     if backend == Backend::Directml {
         #[cfg(windows)]
         {
@@ -171,11 +308,25 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
     }
     #[cfg(feature = "r1-cuda-ep")]
     if backend == Backend::Cuda {
-        builder = builder
-            .with_execution_providers([ort::ep::CUDA::default()
+        let enable_gpt_step_cuda_graph = name == "gpt_step"
+            && std::env::var("ALICE_NATIVE_TTS_GPT_STEP_CUDA_GRAPH")
+                .ok()
+                .as_deref()
+                == Some("1");
+        let cuda_provider = if enable_gpt_step_cuda_graph {
+            ort::ep::CUDA::default()
+                .with_tf32(false)
+                .with_cuda_graph(true)
+                .build()
+                .error_on_failure()
+        } else {
+            ort::ep::CUDA::default()
                 .with_tf32(false)
                 .build()
-                .error_on_failure()])
+                .error_on_failure()
+        };
+        builder = builder
+            .with_execution_providers([cuda_provider])
             .map_err(|e| invalid(e.to_string()))?;
     }
     #[cfg(feature = "r1-tensorrt-ep")]
@@ -215,7 +366,8 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
             .with_profiling(path)
             .map_err(|e| invalid(e.to_string()))?;
     }
-    builder.commit_from_file(path).map_err(|error| {
+    let _trace = LoadTrace::begin("ort_commit_from_file");
+    let result = builder.commit_from_file(path).map_err(|error| {
         if strict_gpu_placement {
             invalid(format!(
                 "strict GPU placement rejected CPU-assigned nodes in {name}: {error}"
@@ -223,7 +375,9 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
         } else {
             invalid(error.to_string())
         }
-    })
+    });
+    drop(_trace);
+    result
 }
 
 fn non_gpt_backend(backend: Backend) -> Backend {
@@ -237,6 +391,10 @@ fn non_gpt_backend(backend: Backend) -> Backend {
     if backend == Backend::TensorRt {
         backend = Backend::Cpu;
     }
+    #[cfg(feature = "r2-trt-native")]
+    if backend == Backend::TensorRtNative {
+        backend = Backend::Cpu;
+    }
     backend
 }
 
@@ -246,6 +404,8 @@ fn gpt_backend(backend: Backend) -> Backend {
         Backend::Cuda => Backend::Cuda,
         #[cfg(feature = "r1-tensorrt-ep")]
         Backend::TensorRt => Backend::TensorRt,
+        #[cfg(feature = "r2-trt-native")]
+        Backend::TensorRtNative => Backend::Cpu,
         _ => Backend::Cpu,
     }
 }
@@ -266,6 +426,10 @@ fn is_cuda_backend(backend: Backend) -> bool {
 fn cuda_vits_requested(backend: Backend) -> bool {
     #[cfg(feature = "r1-cuda-ep")]
     if backend == Backend::Cuda {
+        return std::env::var("ALICE_NATIVE_TTS_CUDA_VITS").ok().as_deref() == Some("1");
+    }
+    #[cfg(all(feature = "r2-trt-native", feature = "r1-cuda-ep"))]
+    if backend == Backend::TensorRtNative {
         return std::env::var("ALICE_NATIVE_TTS_CUDA_VITS").ok().as_deref() == Some("1");
     }
     let _ = backend;
@@ -335,7 +499,13 @@ fn profile_prefix(name: &str) -> Result<Option<PathBuf>> {
     static NEXT_PROFILE: AtomicU64 = AtomicU64::new(0);
     if !matches!(
         name,
-        "bert" | "g2pw" | "gpt_encoder" | "gpt_step" | "sovits" | "sovits_stream"
+        "bert"
+            | "g2pw"
+            | "gpt_encoder"
+            | "gpt_step"
+            | "gpt_step_init_v2"
+            | "sovits"
+            | "sovits_stream"
     ) {
         return Ok(None);
     }
@@ -369,11 +539,29 @@ fn validate_gpt_lengths(
 #[cfg(feature = "r1-cuda-ep")]
 struct GpuStepBinding {
     binding: IoBinding,
+    run_options: Option<RunOptions>,
 }
+
+#[cfg(all(feature = "r1-cuda-ep", feature = "r0-profiling"))]
+#[derive(Default)]
+struct GptStepCudaSpans {
+    binding_update: Option<(Instant, Instant)>,
+    ort_run: Option<(Instant, Instant)>,
+    sync_wait: Option<(Instant, Instant)>,
+    output_check: Option<(Instant, Instant)>,
+}
+
+#[cfg(all(feature = "r1-cuda-ep", not(feature = "r0-profiling")))]
+#[derive(Default)]
+struct GptStepCudaSpans;
 
 #[cfg(feature = "r1-cuda-ep")]
 impl GpuStepBinding {
-    fn new(session: &Session) -> Result<Self> {
+    fn new(
+        session: &Session,
+        graph_id: Option<usize>,
+        cache_layout: GptStepCacheLayout,
+    ) -> Result<Self> {
         let cpu_output = MemoryInfo::new(
             AllocationDevice::CPU,
             0,
@@ -389,9 +577,42 @@ impl GpuStepBinding {
         let mut binding = session.create_binding()?;
         binding.bind_output_to_device("topk_values", &cpu_output)?;
         binding.bind_output_to_device("topk_indices", &cpu_output)?;
-        binding.bind_output_to_device("k_cache_new", &cuda_output)?;
-        binding.bind_output_to_device("v_cache_new", &cuda_output)?;
-        Ok(Self { binding })
+        match cache_layout {
+            GptStepCacheLayout::Abi1Packed => {
+                binding.bind_output_to_device("k_cache_new", &cuda_output)?;
+                binding.bind_output_to_device("v_cache_new", &cuda_output)?;
+            }
+            GptStepCacheLayout::V2PerLayer => {
+                for layer in 0..GPT_STEP_CACHE_LAYERS {
+                    binding.bind_output_to_device(
+                        &format!("k_cache_new_layer_{layer:02}"),
+                        &cuda_output,
+                    )?;
+                    binding.bind_output_to_device(
+                        &format!("v_cache_new_layer_{layer:02}"),
+                        &cuda_output,
+                    )?;
+                }
+            }
+        }
+        let run_options = if let Some(graph_id) = graph_id {
+            let mut options = RunOptions::new()?;
+            options.add_config_entry("gpu_graph_id", graph_id.to_string())?;
+            Some(options)
+        } else {
+            None
+        };
+        Ok(Self {
+            binding,
+            run_options,
+        })
+    }
+
+    fn bind_request_inputs(&mut self, x_len: &DynValue, y_len: &DynValue) -> Result<()> {
+        self.binding.clear_inputs();
+        self.binding.bind_input("x_len", x_len)?;
+        self.binding.bind_input("y_len", y_len)?;
+        Ok(())
     }
 }
 
@@ -446,21 +667,70 @@ fn run_gpt_step_cuda(
     y_len: &DynValue,
     key: &DynValue,
     value: &DynValue,
-) -> Result<(DynValue, DynValue, DynValue, DynValue)> {
+    reuse_static_inputs: bool,
+    sync_probe: bool,
+) -> Result<(DynValue, DynValue, DynValue, DynValue, GptStepCudaSpans)> {
+    #[cfg(windows)]
+    let _token_nvtx = crate::nvtx::Range::push(b"gpt_step_token\0");
+
+    #[cfg(feature = "r0-profiling")]
+    let mut spans = GptStepCudaSpans::default();
+    #[cfg(not(feature = "r0-profiling"))]
+    let spans = GptStepCudaSpans;
+
+    #[cfg(feature = "r0-profiling")]
+    let binding_started = Instant::now();
     ensure_cuda_value(key, "gpt_step.k_cache input")?;
     ensure_cuda_value(value, "gpt_step.v_cache input")?;
 
     let io = &mut binding.binding;
     // Keep this binding's device-side output buffers alive and reusable.
     // Only the small CPU inputs change from token to token.
-    io.clear_inputs();
+    if !reuse_static_inputs {
+        io.clear_inputs();
+        io.bind_input("x_len", x_len)?;
+        io.bind_input("y_len", y_len)?;
+    }
     io.bind_input("samples", &sample)?;
     io.bind_input("idx", &idx)?;
-    io.bind_input("x_len", x_len)?;
-    io.bind_input("y_len", y_len)?;
     io.bind_input("k_cache", key)?;
     io.bind_input("v_cache", value)?;
-    let mut outputs = session.run_binding(io)?;
+    #[cfg(feature = "r0-profiling")]
+    {
+        spans.binding_update = Some((binding_started, Instant::now()));
+    }
+
+    #[cfg(feature = "r0-profiling")]
+    let run_started = Instant::now();
+    let outputs_result = {
+        #[cfg(windows)]
+        let _ort_nvtx = crate::nvtx::Range::push(b"gpt_step_ort_run\0");
+        if let Some(run_options) = &binding.run_options {
+            session.run_binding_with_options(io, run_options)
+        } else {
+            session.run_binding(io)
+        }
+    };
+    let mut outputs = outputs_result?;
+    #[cfg(feature = "r0-profiling")]
+    {
+        spans.ort_run = Some((run_started, Instant::now()));
+    }
+
+    #[cfg(feature = "r0-profiling")]
+    let sync_started = sync_probe.then(Instant::now);
+    if sync_probe {
+        // Diagnostic-only fence: the normal path relies on the CPU-bound
+        // top-k output contract and does not add an explicit stream wait.
+        io.synchronize_outputs()?;
+    }
+    #[cfg(feature = "r0-profiling")]
+    if let Some(sync_started) = sync_started {
+        spans.sync_wait = Some((sync_started, Instant::now()));
+    }
+
+    #[cfg(feature = "r0-profiling")]
+    let output_started = Instant::now();
     let topk_values = take(&mut outputs, "topk_values")?;
     let topk_indices = take(&mut outputs, "topk_indices")?;
     let key_cache = take(&mut outputs, "k_cache_new")?;
@@ -487,7 +757,253 @@ fn run_gpt_step_cuda(
             "GPT Step sampling outputs must remain host-accessible for the existing sampler",
         ));
     }
-    Ok((topk_values, topk_indices, key_cache, value_cache))
+    #[cfg(feature = "r0-profiling")]
+    {
+        spans.output_check = Some((output_started, Instant::now()));
+    }
+    Ok((topk_values, topk_indices, key_cache, value_cache, spans))
+}
+
+#[cfg(feature = "r1-cuda-ep")]
+fn take_cuda_cache_layers(
+    outputs: &mut ort::session::SessionOutputs<'_>,
+    prefix: &str,
+) -> Result<Vec<DynValue>> {
+    (0..GPT_STEP_CACHE_LAYERS)
+        .map(|layer| {
+            let value = take(outputs, &format!("{prefix}_{layer:02}"))?;
+            ensure_cuda_value(&value, &format!("gpt_step_v2.{prefix}_{layer:02}"))?;
+            Ok(value)
+        })
+        .collect()
+}
+
+#[cfg(feature = "r1-cuda-ep")]
+fn check_cuda_v2_cache_outputs(
+    key: &[DynValue],
+    value: &[DynValue],
+    key_new: &[DynValue],
+    value_new: &[DynValue],
+) -> Result<()> {
+    if [key.len(), value.len(), key_new.len(), value_new.len()]
+        .iter()
+        .any(|len| *len != GPT_STEP_CACHE_LAYERS)
+    {
+        return Err(invalid("GPT Step v2 CUDA cache layer count mismatch"));
+    }
+    for layer in 0..GPT_STEP_CACHE_LAYERS {
+        if tensor_data_ptr(&key[layer], "gpt_step_v2.k_cache input")?
+            == tensor_data_ptr(&key_new[layer], "gpt_step_v2.k_cache output")?
+            || tensor_data_ptr(&value[layer], "gpt_step_v2.v_cache input")?
+                == tensor_data_ptr(&value_new[layer], "gpt_step_v2.v_cache output")?
+        {
+            return Err(invalid(
+                "GPT Step v2 CUDA ping-pong cache buffers alias their inputs",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "r1-cuda-ep")]
+fn check_cuda_sampling_outputs(topk_values: &DynValue, topk_indices: &DynValue) -> Result<()> {
+    let values = topk_values.downcast_ref::<DynTensorValueType>()?;
+    let indices = topk_indices.downcast_ref::<DynTensorValueType>()?;
+    if values.memory_info().allocation_device() != AllocationDevice::CPU
+        || indices.memory_info().allocation_device() != AllocationDevice::CPU
+    {
+        return Err(invalid(
+            "GPT Step sampling outputs must remain host-accessible for the existing sampler",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "r1-cuda-ep")]
+fn run_gpt_step_v2_cuda_init(
+    session: &mut Session,
+    binding: &mut GpuStepBinding,
+    sample: Tensor<i64>,
+    idx: Tensor<i64>,
+    x_len: &DynValue,
+    y_len: &DynValue,
+    key: &DynValue,
+    value: &DynValue,
+    sync_probe: bool,
+) -> Result<(
+    DynValue,
+    DynValue,
+    Vec<DynValue>,
+    Vec<DynValue>,
+    GptStepCudaSpans,
+)> {
+    #[cfg(windows)]
+    let _token_nvtx = crate::nvtx::Range::push(b"gpt_step_token\0");
+    #[cfg(feature = "r0-profiling")]
+    let mut spans = GptStepCudaSpans::default();
+    #[cfg(not(feature = "r0-profiling"))]
+    let spans = GptStepCudaSpans;
+
+    ensure_cuda_value(key, "gpt_step_init_v2.k_cache input")?;
+    ensure_cuda_value(value, "gpt_step_init_v2.v_cache input")?;
+    #[cfg(feature = "r0-profiling")]
+    let binding_started = Instant::now();
+    let io = &mut binding.binding;
+    io.clear_inputs();
+    io.bind_input("x_len", x_len)?;
+    io.bind_input("y_len", y_len)?;
+    io.bind_input("samples", &sample)?;
+    io.bind_input("idx", &idx)?;
+    io.bind_input("k_cache", key)?;
+    io.bind_input("v_cache", value)?;
+    #[cfg(feature = "r0-profiling")]
+    {
+        spans.binding_update = Some((binding_started, Instant::now()));
+    }
+
+    #[cfg(feature = "r0-profiling")]
+    let run_started = Instant::now();
+    let outputs_result = {
+        #[cfg(windows)]
+        let _ort_nvtx = crate::nvtx::Range::push(b"gpt_step_ort_run\0");
+        if let Some(run_options) = &binding.run_options {
+            session.run_binding_with_options(io, run_options)
+        } else {
+            session.run_binding(io)
+        }
+    };
+    let mut outputs = outputs_result?;
+    #[cfg(feature = "r0-profiling")]
+    {
+        spans.ort_run = Some((run_started, Instant::now()));
+    }
+
+    #[cfg(feature = "r0-profiling")]
+    let sync_started = sync_probe.then(Instant::now);
+    if sync_probe {
+        io.synchronize_outputs()?;
+    }
+    #[cfg(feature = "r0-profiling")]
+    if let Some(sync_started) = sync_started {
+        spans.sync_wait = Some((sync_started, Instant::now()));
+    }
+
+    #[cfg(feature = "r0-profiling")]
+    let output_started = Instant::now();
+    let topk_values = take(&mut outputs, "topk_values")?;
+    let topk_indices = take(&mut outputs, "topk_indices")?;
+    let key_new = take_cuda_cache_layers(&mut outputs, "k_cache_new_layer")?;
+    let value_new = take_cuda_cache_layers(&mut outputs, "v_cache_new_layer")?;
+    let packed_key_ptr = tensor_data_ptr(key, "gpt_step_init_v2.k_cache input")?;
+    let packed_value_ptr = tensor_data_ptr(value, "gpt_step_init_v2.v_cache input")?;
+    for cache in key_new.iter().chain(&value_new) {
+        let ptr = tensor_data_ptr(cache, "gpt_step_init_v2 cache output")?;
+        if ptr == packed_key_ptr || ptr == packed_value_ptr {
+            return Err(invalid(
+                "GPT Step v2 initial cache outputs alias their packed inputs",
+            ));
+        }
+    }
+    check_cuda_sampling_outputs(&topk_values, &topk_indices)?;
+    #[cfg(feature = "r0-profiling")]
+    {
+        spans.output_check = Some((output_started, Instant::now()));
+    }
+    Ok((topk_values, topk_indices, key_new, value_new, spans))
+}
+
+#[cfg(feature = "r1-cuda-ep")]
+fn run_gpt_step_v2_cuda(
+    session: &mut Session,
+    binding: &mut GpuStepBinding,
+    sample: Tensor<i64>,
+    idx: Tensor<i64>,
+    x_len: &DynValue,
+    y_len: &DynValue,
+    key: &[DynValue],
+    value: &[DynValue],
+    reuse_static_inputs: bool,
+    sync_probe: bool,
+) -> Result<(
+    DynValue,
+    DynValue,
+    Vec<DynValue>,
+    Vec<DynValue>,
+    GptStepCudaSpans,
+)> {
+    if key.len() != GPT_STEP_CACHE_LAYERS || value.len() != GPT_STEP_CACHE_LAYERS {
+        return Err(invalid("GPT Step v2 CUDA expects 24 K/V cache layers"));
+    }
+    for layer in 0..GPT_STEP_CACHE_LAYERS {
+        ensure_cuda_value(&key[layer], "gpt_step_v2.k_cache input")?;
+        ensure_cuda_value(&value[layer], "gpt_step_v2.v_cache input")?;
+    }
+    #[cfg(windows)]
+    let _token_nvtx = crate::nvtx::Range::push(b"gpt_step_token\0");
+    #[cfg(feature = "r0-profiling")]
+    let mut spans = GptStepCudaSpans::default();
+    #[cfg(not(feature = "r0-profiling"))]
+    let spans = GptStepCudaSpans;
+
+    #[cfg(feature = "r0-profiling")]
+    let binding_started = Instant::now();
+    let io = &mut binding.binding;
+    if !reuse_static_inputs {
+        io.clear_inputs();
+        io.bind_input("x_len", x_len)?;
+        io.bind_input("y_len", y_len)?;
+    }
+    io.bind_input("samples", &sample)?;
+    io.bind_input("idx", &idx)?;
+    for layer in 0..GPT_STEP_CACHE_LAYERS {
+        io.bind_input(&format!("k_cache_layer_{layer:02}"), &key[layer])?;
+        io.bind_input(&format!("v_cache_layer_{layer:02}"), &value[layer])?;
+    }
+    #[cfg(feature = "r0-profiling")]
+    {
+        spans.binding_update = Some((binding_started, Instant::now()));
+    }
+
+    #[cfg(feature = "r0-profiling")]
+    let run_started = Instant::now();
+    let outputs_result = {
+        #[cfg(windows)]
+        let _ort_nvtx = crate::nvtx::Range::push(b"gpt_step_ort_run\0");
+        if let Some(run_options) = &binding.run_options {
+            session.run_binding_with_options(io, run_options)
+        } else {
+            session.run_binding(io)
+        }
+    };
+    let mut outputs = outputs_result?;
+    #[cfg(feature = "r0-profiling")]
+    {
+        spans.ort_run = Some((run_started, Instant::now()));
+    }
+
+    #[cfg(feature = "r0-profiling")]
+    let sync_started = sync_probe.then(Instant::now);
+    if sync_probe {
+        io.synchronize_outputs()?;
+    }
+    #[cfg(feature = "r0-profiling")]
+    if let Some(sync_started) = sync_started {
+        spans.sync_wait = Some((sync_started, Instant::now()));
+    }
+
+    #[cfg(feature = "r0-profiling")]
+    let output_started = Instant::now();
+    let topk_values = take(&mut outputs, "topk_values")?;
+    let topk_indices = take(&mut outputs, "topk_indices")?;
+    let key_new = take_cuda_cache_layers(&mut outputs, "k_cache_new_layer")?;
+    let value_new = take_cuda_cache_layers(&mut outputs, "v_cache_new_layer")?;
+    check_cuda_v2_cache_outputs(key, value, &key_new, &value_new)?;
+    check_cuda_sampling_outputs(&topk_values, &topk_indices)?;
+    #[cfg(feature = "r0-profiling")]
+    {
+        spans.output_check = Some((output_started, Instant::now()));
+    }
+    Ok((topk_values, topk_indices, key_new, value_new, spans))
 }
 
 pub struct NativeTts {
@@ -498,13 +1014,21 @@ pub struct NativeTts {
     cuda_gpt: bool,
     #[cfg(feature = "r1-cuda-ep")]
     cuda_step_bindings: Option<[GpuStepBinding; 2]>,
+    #[cfg(feature = "r1-cuda-ep")]
+    cuda_step_init_binding: Option<GpuStepBinding>,
     warmed: bool,
     frontend: Frontend,
-    enc: Session,
-    step: Session,
+    enc: Option<Session>,
+    step: Option<Session>,
+    #[cfg(feature = "r2-trt-native")]
+    native_trt_gpt: Option<NativeTrtGpt>,
+    #[cfg(feature = "r1-cuda-ep")]
+    step_init: Option<Session>,
     step_cache_layout: GptStepCacheLayout,
     sovits: Session,
     prompts: Tensor<i64>,
+    #[cfg(feature = "r2-trt-native")]
+    prompt_ids: Vec<i64>,
     spec: DynValue,
     sv: DynValue,
     reference_phones: Vec<i64>,
@@ -516,6 +1040,17 @@ pub struct NativeTts {
 }
 
 impl NativeTts {
+    fn native_trt_gpt_active(&self) -> bool {
+        #[cfg(feature = "r2-trt-native")]
+        {
+            self.native_trt_gpt.is_some()
+        }
+        #[cfg(not(feature = "r2-trt-native"))]
+        {
+            false
+        }
+    }
+
     fn cuda_vits_active(&self) -> bool {
         #[cfg(feature = "r1-cuda-ep")]
         {
@@ -528,12 +1063,15 @@ impl NativeTts {
     }
 
     pub fn load(config: &Config, cancel: &impl Fn() -> bool) -> Result<Self> {
+        let _trace = LoadTrace::begin("validate_model_pack");
         validate_pack(&config.model_dir)?;
         if config.streaming {
             validate_streaming_pack(&config.model_dir)?;
         }
+        drop(_trace);
         check(cancel)?;
         let dir = &config.model_dir;
+        let _trace = LoadTrace::begin("read_pack_and_reference_audio");
         let pack: Pack = serde_json::from_slice(&std::fs::read(dir.join("pack.json"))?)?;
         if config.reference_audio.is_some() != config.reference_text.is_some() {
             return Err(invalid(
@@ -549,7 +1087,12 @@ impl NativeTts {
             .as_deref()
             .unwrap_or(&pack.reference_text);
         let (wav16, wav32) = audio::reference(&reference_path)?;
+        drop(_trace);
         let frontend_backend = non_gpt_backend(config.backend);
+        #[cfg(feature = "r2-trt-native")]
+        let native_trt_enabled = config.backend == Backend::TensorRtNative;
+        #[cfg(not(feature = "r2-trt-native"))]
+        let native_trt_enabled = false;
         let cuda_vits = cuda_vits_requested(config.backend);
         let vocoder_backend = if cuda_vits && config.streaming {
             #[cfg(feature = "r1-cuda-ep")]
@@ -563,9 +1106,14 @@ impl NativeTts {
         } else {
             frontend_backend
         };
+        let _trace = LoadTrace::begin("frontend_session_load");
         let mut frontend = Frontend::load(dir, frontend_backend)?;
+        drop(_trace);
         check(cancel)?;
+        let _trace = LoadTrace::begin("frontend_reference_process");
         let (reference_phones, reference_features) = frontend.process(reference_text, cancel)?;
+        drop(_trace);
+        let _trace = LoadTrace::begin("reference_cpu_session_load");
         let mut ssl = open(dir, "ssl")?;
         check(cancel)?;
         let mut vq = open(dir, "vq_encoder")?;
@@ -573,51 +1121,131 @@ impl NativeTts {
         let mut spectrogram = open(dir, "spectrogram")?;
         check(cancel)?;
         let mut speaker = open(dir, "sv_embedding")?;
+        drop(_trace);
         check(cancel)?;
         let mut padded = wav16.clone();
         padded.resize(padded.len() + 4800, 0.0);
+        let _trace = LoadTrace::begin("reference_ssl_inference");
         let mut ssl_out = ssl.run(ort::inputs! {"audio"=>tf(vec![1,padded.len()],padded)?})?;
         let content = take(&mut ssl_out, "last_hidden_state")?;
+        drop(_trace);
         check(cancel)?;
+        let _trace = LoadTrace::begin("reference_vq_inference");
         let vq_out = vq.run(ort::inputs! {"ssl_content"=>&content})?;
         let (_, codes) = vq_out
             .get("codes")
             .ok_or_else(|| invalid("incompatible VQ output"))?
             .try_extract_tensor::<i64>()?;
         let prompt_tokens = codes.len();
-        let prompts = ti(vec![1, prompt_tokens], codes.to_vec())?;
+        let prompt_ids = codes.to_vec();
+        let prompts = ti(vec![1, prompt_tokens], prompt_ids.clone())?;
+        drop(_trace);
+        let _trace = LoadTrace::begin("reference_spectrogram_inference");
         let spec = take(
             &mut spectrogram.run(ort::inputs! {"audio"=>tf(vec![1,wav32.len()],wav32)?})?,
             "spectrogram",
         )?;
+        drop(_trace);
         check(cancel)?;
+        let _trace = LoadTrace::begin("reference_speaker_inference");
         let sv = take(
             &mut speaker.run(ort::inputs! {"audio"=>tf(vec![1,wav16.len()],wav16)?})?,
             "sv_embedding",
         )?;
+        drop(_trace);
         check(cancel)?;
         // Reference-only sessions can release their weights before GPT/VITS load.
         drop(vq_out);
         drop(ssl_out);
         drop(content);
         drop((ssl, vq, spectrogram, speaker));
-        let encoder_backend = gpt_backend(config.backend);
-        let enc = open_on(dir, "gpt_encoder", encoder_backend)?;
-        check(cancel)?;
-        let (step, step_cache_layout) = open_step(dir, config.backend)?;
-        let cuda_gpt = is_cuda_backend(config.backend);
-        if cuda_gpt && step_cache_layout != GptStepCacheLayout::Abi1Packed {
-            return Err(invalid(
-                "CUDA-resident KV cache currently requires the ABI-1 packed GPT Step graph",
-            ));
-        }
-        #[cfg(feature = "r1-cuda-ep")]
-        let cuda_step_bindings = if cuda_gpt {
-            Some([GpuStepBinding::new(&step)?, GpuStepBinding::new(&step)?])
+        #[cfg(feature = "r2-trt-native")]
+        let native_trt_gpt = if native_trt_enabled {
+            check(cancel)?;
+            let _trace = LoadTrace::begin("native_tensorrt_gpt_load");
+            let runner = NativeTrtGpt::load(dir)?;
+            drop(_trace);
+            Some(runner)
         } else {
             None
         };
+        let (enc, step, step_cache_layout) = if native_trt_enabled {
+            (None, None, GptStepCacheLayout::Abi1Packed)
+        } else {
+            let encoder_backend = gpt_backend(config.backend);
+            let _trace = LoadTrace::begin("gpt_encoder_session_load");
+            let enc = open_on(dir, "gpt_encoder", encoder_backend)?;
+            drop(_trace);
+            check(cancel)?;
+            let _trace = LoadTrace::begin("gpt_step_session_load");
+            let (step, step_cache_layout) = open_step(dir, config.backend)?;
+            drop(_trace);
+            (Some(enc), Some(step), step_cache_layout)
+        };
+        let cuda_gpt = is_cuda_backend(config.backend);
+        #[cfg(feature = "r1-cuda-ep")]
+        let step_init = if cuda_gpt && step_cache_layout == GptStepCacheLayout::V2PerLayer {
+            if std::env::var("ALICE_NATIVE_TTS_GPT_STEP_CUDA_GRAPH")
+                .ok()
+                .as_deref()
+                == Some("1")
+            {
+                return Err(invalid(
+                    "CUDA Graph and the R1.7 per-layer cache experiment must be tested separately",
+                ));
+            }
+            let graph = dir.join("gpt_step_init_v2.onnx");
+            if !graph.is_file() {
+                return Err(invalid(
+                    "CUDA GPT Step v2 requires gpt_step_init_v2.onnx in the model pack",
+                ));
+            }
+            let _trace = LoadTrace::begin("gpt_step_init_v2_session_load");
+            let session = open_path(&graph, "gpt_step_init_v2", config.backend)?;
+            drop(_trace);
+            Some(session)
+        } else {
+            None
+        };
+        #[cfg(feature = "r1-cuda-ep")]
+        let _trace = LoadTrace::begin("gpt_step_io_binding_setup");
+        #[cfg(feature = "r1-cuda-ep")]
+        let cuda_step_bindings = if cuda_gpt {
+            let cuda_graph = std::env::var("ALICE_NATIVE_TTS_GPT_STEP_CUDA_GRAPH")
+                .ok()
+                .as_deref()
+                == Some("1");
+            Some([
+                GpuStepBinding::new(
+                    step.as_ref()
+                        .ok_or_else(|| invalid("CUDA GPT Step Session is missing"))?,
+                    cuda_graph.then_some(0),
+                    step_cache_layout,
+                )?,
+                GpuStepBinding::new(
+                    step.as_ref()
+                        .ok_or_else(|| invalid("CUDA GPT Step Session is missing"))?,
+                    cuda_graph.then_some(1),
+                    step_cache_layout,
+                )?,
+            ])
+        } else {
+            None
+        };
+        #[cfg(feature = "r1-cuda-ep")]
+        let cuda_step_init_binding = if let Some(session) = step_init.as_ref() {
+            Some(GpuStepBinding::new(
+                session,
+                None,
+                GptStepCacheLayout::V2PerLayer,
+            )?)
+        } else {
+            None
+        };
+        #[cfg(feature = "r1-cuda-ep")]
+        drop(_trace);
         check(cancel)?;
+        let _trace = LoadTrace::begin("vits_session_load");
         let sovits = open_on(
             dir,
             if config.streaming {
@@ -627,6 +1255,7 @@ impl NativeTts {
             },
             vocoder_backend,
         )?;
+        drop(_trace);
         check(cancel)?;
         if reference_phones.len() + prompt_tokens + 32 >= 512 {
             return Err(invalid("reference exceeds KV cache budget"));
@@ -639,13 +1268,21 @@ impl NativeTts {
             cuda_gpt,
             #[cfg(feature = "r1-cuda-ep")]
             cuda_step_bindings,
+            #[cfg(feature = "r1-cuda-ep")]
+            cuda_step_init_binding,
             warmed: false,
             frontend,
             enc,
             step,
+            #[cfg(feature = "r2-trt-native")]
+            native_trt_gpt,
+            #[cfg(feature = "r1-cuda-ep")]
+            step_init,
             step_cache_layout,
             sovits,
             prompts,
+            #[cfg(feature = "r2-trt-native")]
+            prompt_ids,
             spec,
             sv,
             reference_phones,
@@ -665,8 +1302,16 @@ impl NativeTts {
             return Ok(Vec::new());
         }
         let mut paths = Vec::with_capacity(5);
-        paths.push(PathBuf::from(self.enc.end_profiling()?));
-        paths.push(PathBuf::from(self.step.end_profiling()?));
+        if let Some(encoder) = self.enc.as_mut() {
+            paths.push(PathBuf::from(encoder.end_profiling()?));
+        }
+        if let Some(step) = self.step.as_mut() {
+            paths.push(PathBuf::from(step.end_profiling()?));
+        }
+        #[cfg(feature = "r1-cuda-ep")]
+        if let Some(step_init) = self.step_init.as_mut() {
+            paths.push(PathBuf::from(step_init.end_profiling()?));
+        }
         paths.push(PathBuf::from(self.sovits.end_profiling()?));
         paths.extend(self.frontend.finish_ort_profiling()?);
         self.ort_profiling = false;
@@ -753,6 +1398,9 @@ impl NativeTts {
             cancel,
             CHUNK_TOKENS,
             CHUNK_TOKENS,
+            None,
+            None,
+            None,
             &mut profile,
             emit,
         )
@@ -777,6 +1425,9 @@ impl NativeTts {
             cancel,
             chunk_tokens,
             chunk_tokens,
+            None,
+            None,
+            None,
             &mut profile,
             emit,
         )?;
@@ -805,10 +1456,103 @@ impl NativeTts {
             cancel,
             first_chunk_tokens,
             CHUNK_TOKENS,
+            None,
+            None,
+            None,
             &mut profile,
             emit,
         )?;
         Ok((timings, profile.finish()))
+    }
+
+    /// Feature-gated R1.8 experiment and matched Chunk-24 control. A preview
+    /// is emitted after 17 or 20 semantic tokens, then refilled at 24 tokens.
+    /// `None` runs the unchanged Chunk-24 strategy through the same harness.
+    #[cfg(feature = "r1-r8-preview")]
+    #[doc(hidden)]
+    pub fn synthesize_streaming_r1_8_experiment(
+        &mut self,
+        text: &str,
+        cancel: &impl Fn() -> bool,
+        preview_tokens: Option<usize>,
+        emit: impl FnMut(&[f32], ChunkInfo),
+    ) -> Result<(SynthesisTimings, serde_json::Value)> {
+        if preview_tokens.is_some_and(|tokens| ![17, 20].contains(&tokens)) {
+            return Err(invalid("R1.8 preview must use 17 or 20 semantic tokens"));
+        }
+        if !self.streaming {
+            return Err(invalid("R1.8 preview requires the ABI-1 streaming graph"));
+        }
+        let mut profile = ProfileCollector::disabled();
+        let mut diagnostics = PreviewRefillDiagnostics {
+            preview_tokens,
+            refill_target_tokens: preview_tokens.map(|_| CHUNK_TOKENS),
+            ..PreviewRefillDiagnostics::default()
+        };
+        let timings = self.synthesize_streaming_inner(
+            text,
+            cancel,
+            preview_tokens.unwrap_or(CHUNK_TOKENS),
+            CHUNK_TOKENS,
+            preview_tokens.map(|_| CHUNK_TOKENS),
+            Some(&mut diagnostics),
+            None,
+            &mut profile,
+            emit,
+        )?;
+        if preview_tokens.is_some()
+            && diagnostics.preview_callback_tokens.is_none()
+            && diagnostics.preview_fallback_reason.is_none()
+        {
+            diagnostics.preview_fallback_reason = Some("semantic_eos_before_preview_threshold");
+        }
+        Ok((timings, serde_json::to_value(diagnostics)?))
+    }
+
+    /// R1.9 feasibility experiment. It emits only a short, onset-relative
+    /// prefix at token 17, then re-decodes the full semantic prefix at token
+    /// 24. Unsafe joins return diagnostics with no silent splice fallback.
+    #[cfg(feature = "r1-r9-bounded-preview")]
+    #[doc(hidden)]
+    pub fn synthesize_streaming_r1_9_bounded_experiment(
+        &mut self,
+        text: &str,
+        cancel: &impl Fn() -> bool,
+        publish_after_onset_ms: usize,
+        emit: impl FnMut(&[f32], ChunkInfo),
+    ) -> Result<(Option<SynthesisTimings>, serde_json::Value)> {
+        if ![40, 80, 120].contains(&publish_after_onset_ms) {
+            return Err(invalid(
+                "R1.9 publish window must be 40, 80, or 120 ms after voice onset",
+            ));
+        }
+        if !self.streaming {
+            return Err(invalid("R1.9 preview requires the ABI-1 streaming graph"));
+        }
+        let mut profile = ProfileCollector::disabled();
+        let mut diagnostics = PreviewRefillDiagnostics {
+            preview_tokens: Some(17),
+            refill_target_tokens: Some(CHUNK_TOKENS),
+            ..PreviewRefillDiagnostics::default()
+        };
+        let result = self.synthesize_streaming_inner(
+            text,
+            cancel,
+            17,
+            CHUNK_TOKENS,
+            Some(CHUNK_TOKENS),
+            Some(&mut diagnostics),
+            Some(publish_after_onset_ms),
+            &mut profile,
+            emit,
+        );
+        match result {
+            Ok(timings) => Ok((Some(timings), serde_json::to_value(diagnostics)?)),
+            Err(_) if diagnostics.refill_rejected_reason.is_some() => {
+                Ok((None, serde_json::to_value(diagnostics)?))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn synthesize_streaming_inner(
@@ -817,6 +1561,9 @@ impl NativeTts {
         cancel: &impl Fn() -> bool,
         first_chunk_tokens: usize,
         chunk_tokens: usize,
+        preview_refill_at: Option<usize>,
+        mut preview_diagnostics: Option<&mut PreviewRefillDiagnostics>,
+        bounded_preview_after_onset_ms: Option<usize>,
         profile: &mut ProfileCollector,
         mut emit: impl FnMut(&[f32], ChunkInfo),
     ) -> Result<SynthesisTimings> {
@@ -867,28 +1614,67 @@ impl NativeTts {
                 + (self.reference_features.len() + features.len()) * std::mem::size_of::<f32>(),
         );
         check(cancel)?;
-        let phoneme_ids =
-            profile.measure(ProfilePhase::GptEncoderInput, || ti(vec![1, n], all_phones))?;
-        let bert_feature = profile.measure(ProfilePhase::GptEncoderInput, || {
-            tf(vec![1, 1024, n], all_features)
-        })?;
-        let (mut values, mut ids, x_len, y_len, mut kv_cache) = if self.cuda_gpt {
+        let (mut values, mut ids, x_len, y_len, mut kv_cache) = if self.native_trt_gpt_active() {
+            #[cfg(feature = "r2-trt-native")]
+            {
+                let runner = self
+                    .native_trt_gpt
+                    .as_mut()
+                    .ok_or_else(|| invalid("native TensorRT GPT runner was not initialized"))?;
+                runner.reset();
+                let (raw_values, raw_ids, raw_x_len, raw_y_len) = {
+                    profile.measure(ProfilePhase::GptEncoderRun, || {
+                        runner.run_encoder(&all_phones, &self.prompt_ids, &all_features)
+                    })?
+                };
+                let (values, ids, x_len, y_len) =
+                    profile.measure(ProfilePhase::GptEncoderOutput, || {
+                        let count = raw_values.len();
+                        Ok::<_, crate::Error>((
+                            tf(vec![1, count], raw_values)?.into_dyn(),
+                            ti(vec![1, count], raw_ids)?.into_dyn(),
+                            ti(vec![1], vec![raw_x_len])?.into_dyn(),
+                            ti(vec![1], vec![raw_y_len])?.into_dyn(),
+                        ))
+                    })?;
+                validate_gpt_lengths(&x_len, &y_len, n, self.prompt_tokens)?;
+                (values, ids, x_len, y_len, GptKvCache::TensorRtNative)
+            }
+            #[cfg(not(feature = "r2-trt-native"))]
+            {
+                return Err(invalid(
+                    "native TensorRT GPT inference requires the r2-trt-native feature",
+                ));
+            }
+        } else if self.cuda_gpt {
             #[cfg(feature = "r1-cuda-ep")]
             {
+                let phoneme_ids = profile
+                    .measure(ProfilePhase::GptEncoderInput, || ti(vec![1, n], all_phones))?;
+                let bert_feature = profile.measure(ProfilePhase::GptEncoderInput, || {
+                    tf(vec![1, 1024, n], all_features)
+                })?;
                 let (values, ids, x_len, y_len, k, v) =
                     profile.measure(ProfilePhase::GptEncoderRun, || {
                         run_gpt_encoder_cuda(
-                            &mut self.enc,
+                            self.enc
+                                .as_mut()
+                                .ok_or_else(|| invalid("CUDA GPT Encoder Session is missing"))?,
                             phoneme_ids,
                             &self.prompts,
                             bert_feature,
                         )
                     })?;
                 validate_gpt_lengths(&x_len, &y_len, n, self.prompt_tokens)?;
-                let cache = GptKvCache::CudaAbi1PingPong {
-                    key: k,
-                    value: v,
-                    next_binding: 0,
+                let cache = match self.step_cache_layout {
+                    GptStepCacheLayout::Abi1Packed => GptKvCache::CudaAbi1PingPong {
+                        key: k,
+                        value: v,
+                        next_binding: 0,
+                    },
+                    GptStepCacheLayout::V2PerLayer => {
+                        GptKvCache::CudaV2Initial { key: k, value: v }
+                    }
                 };
                 (values, ids, x_len, y_len, cache)
             }
@@ -899,11 +1685,20 @@ impl NativeTts {
                 ));
             }
         } else {
+            let phoneme_ids =
+                profile.measure(ProfilePhase::GptEncoderInput, || ti(vec![1, n], all_phones))?;
+            let bert_feature = profile.measure(ProfilePhase::GptEncoderInput, || {
+                tf(vec![1, 1024, n], all_features)
+            })?;
+            let enc = self
+                .enc
+                .as_mut()
+                .ok_or_else(|| invalid("ORT GPT Encoder Session is missing"))?;
             let mut out = profile.measure(ProfilePhase::GptEncoderRun, || {
-                self.enc.run(ort::inputs! {
-                    "phoneme_ids" => phoneme_ids,
-                    "prompts" => &self.prompts,
-                    "bert_feature" => bert_feature
+                enc.run(ort::inputs! {
+                "phoneme_ids" => phoneme_ids,
+                "prompts" => &self.prompts,
+                "bert_feature" => bert_feature
                 })
             })?;
             // These lengths stay fixed for the whole autoregressive request.
@@ -930,16 +1725,45 @@ impl NativeTts {
             (values, ids, x_len, y_len, cache)
         };
         profile.finish_event("gpt_prefill", gpt_prefill_event, None);
+        #[cfg(feature = "r1-cuda-ep")]
+        let reuse_cuda_step_bindings = self.cuda_gpt
+            && std::env::var("ALICE_NATIVE_TTS_GPT_STEP_BINDING_MODE")
+                .ok()
+                .as_deref()
+                == Some("reuse_static");
+        #[cfg(feature = "r1-cuda-ep")]
+        if reuse_cuda_step_bindings {
+            profile.measure(ProfilePhase::GptStepRequestBindings, || {
+                let bindings = self
+                    .cuda_step_bindings
+                    .as_mut()
+                    .ok_or_else(|| invalid("CUDA GPT Step I/O Binding was not initialized"))?;
+                for binding in bindings {
+                    binding.bind_request_inputs(&x_len, &y_len)?;
+                }
+                Ok::<_, crate::Error>(())
+            })?;
+        }
+        #[cfg(feature = "r1-cuda-ep")]
+        let sync_probe = std::env::var("ALICE_NATIVE_TTS_GPT_STEP_SYNC_PROBE")
+            .ok()
+            .as_deref()
+            == Some("1");
         let mut random = 1234u64;
         let mut tokens = Vec::new();
         let mut eos = false;
         let mut decoder = StreamDecoder::default();
+        if preview_refill_at.is_some() && bounded_preview_after_onset_ms.is_none() {
+            decoder.enable_preview_refill_mode();
+        }
+        let mut bounded_preview_state: Option<BoundedPreviewState> = None;
         let cuda_vits_active = self.cuda_vits_active();
         let mut vocoder_ms = 0.0;
         let mut delivery_ms = 0.0;
         let mut first_audio_tokens = 0;
         let mut audio_chunks = 0;
         let mut next_audio_tokens = first_chunk_tokens;
+        let mut preview_pending = preview_refill_at.is_some();
         for idx in 0..budget.min(350) {
             check(cancel)?;
             let token = profile.measure(ProfilePhase::SemanticSampling, || {
@@ -953,91 +1777,371 @@ impl NativeTts {
                 return Err(invalid("invalid semantic token"));
             }
             tokens.push(token);
-            let (sample, idx_input) = profile.measure(ProfilePhase::GptStepInput, || {
-                Ok::<_, crate::Error>((
-                    ti(vec![1, 1], vec![token])?,
-                    ti(vec![1], vec![idx as i64])?,
-                ))
-            })?;
-            #[cfg(feature = "r1-cuda-ep")]
-            if let GptKvCache::CudaAbi1PingPong {
-                key,
-                value,
-                next_binding,
-            } = &mut kv_cache
-            {
-                let slot = *next_binding;
-                let bindings = self
-                    .cuda_step_bindings
-                    .as_mut()
-                    .ok_or_else(|| invalid("CUDA GPT Step I/O Binding was not initialized"))?;
-                let (next_values, next_ids, next_key, next_value) =
-                    profile.measure_gpt_step(|| {
-                        run_gpt_step_cuda(
-                            &mut self.step,
-                            &mut bindings[slot],
+            if self.native_trt_gpt_active() {
+                #[cfg(feature = "r2-trt-native")]
+                {
+                    let (raw_values, raw_ids) = profile.measure_gpt_step(|| {
+                        self.native_trt_gpt
+                            .as_mut()
+                            .ok_or_else(|| {
+                                invalid("native TensorRT GPT runner was not initialized")
+                            })?
+                            .run_step(token, idx)
+                    })?;
+                    (values, ids) = profile.measure(ProfilePhase::GptStepOutput, || {
+                        let count = raw_values.len();
+                        Ok::<_, crate::Error>((
+                            tf(vec![1, count], raw_values)?.into_dyn(),
+                            ti(vec![1, count], raw_ids)?.into_dyn(),
+                        ))
+                    })?;
+                }
+                #[cfg(not(feature = "r2-trt-native"))]
+                {
+                    return Err(invalid(
+                        "native TensorRT GPT inference requires the r2-trt-native feature",
+                    ));
+                }
+            } else {
+                let (sample, idx_input) = profile.measure(ProfilePhase::GptStepInput, || {
+                    Ok::<_, crate::Error>((
+                        ti(vec![1, 1], vec![token])?,
+                        ti(vec![1], vec![idx as i64])?,
+                    ))
+                })?;
+                #[cfg(feature = "r1-cuda-ep")]
+                if let GptKvCache::CudaAbi1PingPong {
+                    key,
+                    value,
+                    next_binding,
+                } = &mut kv_cache
+                {
+                    let slot = *next_binding;
+                    let bindings = self
+                        .cuda_step_bindings
+                        .as_mut()
+                        .ok_or_else(|| invalid("CUDA GPT Step I/O Binding was not initialized"))?;
+                    let (next_values, next_ids, next_key, next_value, _spans) = profile
+                        .measure_gpt_step(|| {
+                            run_gpt_step_cuda(
+                                self.step
+                                    .as_mut()
+                                    .ok_or_else(|| invalid("CUDA GPT Step Session is missing"))?,
+                                &mut bindings[slot],
+                                sample,
+                                idx_input,
+                                &x_len,
+                                &y_len,
+                                key,
+                                value,
+                                reuse_cuda_step_bindings,
+                                sync_probe,
+                            )
+                        })?;
+                    #[cfg(feature = "r0-profiling")]
+                    {
+                        profile.record_gpt_step_event(
+                            ProfilePhase::GptStepBindingUpdate,
+                            _spans.binding_update,
+                        );
+                        profile.record_gpt_step_event(ProfilePhase::GptStepOrtRun, _spans.ort_run);
+                        profile
+                            .record_gpt_step_event(ProfilePhase::GptStepSyncWait, _spans.sync_wait);
+                        profile.record_gpt_step_event(
+                            ProfilePhase::GptStepOutputCheck,
+                            _spans.output_check,
+                        );
+                    }
+                    (values, ids) = profile.measure(ProfilePhase::GptStepOutput, || {
+                        Ok::<_, crate::Error>((next_values, next_ids))
+                    })?;
+                    *key = next_key;
+                    *value = next_value;
+                    *next_binding = 1 - slot;
+                    #[cfg(feature = "r0-profiling")]
+                    profile.add_cuda_kv_cache_step();
+                } else if matches!(&kv_cache, GptKvCache::CudaV2Initial { .. }) {
+                    let (next_values, next_ids, next_key, next_value, _spans) = {
+                        let GptKvCache::CudaV2Initial { key, value } = &kv_cache else {
+                            unreachable!("cache variant checked above")
+                        };
+                        let binding = self.cuda_step_init_binding.as_mut().ok_or_else(|| {
+                            invalid("CUDA GPT Step v2 init binding was not initialized")
+                        })?;
+                        let session = self.step_init.as_mut().ok_or_else(|| {
+                            invalid("CUDA GPT Step v2 init session was not initialized")
+                        })?;
+                        profile.measure_gpt_step(|| {
+                            run_gpt_step_v2_cuda_init(
+                                session, binding, sample, idx_input, &x_len, &y_len, key, value,
+                                sync_probe,
+                            )
+                        })?
+                    };
+                    #[cfg(feature = "r0-profiling")]
+                    {
+                        profile.record_gpt_step_event(
+                            ProfilePhase::GptStepBindingUpdate,
+                            _spans.binding_update,
+                        );
+                        profile.record_gpt_step_event(ProfilePhase::GptStepOrtRun, _spans.ort_run);
+                        profile
+                            .record_gpt_step_event(ProfilePhase::GptStepSyncWait, _spans.sync_wait);
+                        profile.record_gpt_step_event(
+                            ProfilePhase::GptStepOutputCheck,
+                            _spans.output_check,
+                        );
+                    }
+                    (values, ids) = profile.measure(ProfilePhase::GptStepOutput, || {
+                        Ok::<_, crate::Error>((next_values, next_ids))
+                    })?;
+                    kv_cache = GptKvCache::CudaV2PerLayer {
+                        key: next_key,
+                        value: next_value,
+                        next_binding: 0,
+                    };
+                    #[cfg(feature = "r0-profiling")]
+                    profile.add_cuda_kv_cache_step();
+                } else if let GptKvCache::CudaV2PerLayer {
+                    key,
+                    value,
+                    next_binding,
+                } = &mut kv_cache
+                {
+                    let slot = *next_binding;
+                    let bindings = self.cuda_step_bindings.as_mut().ok_or_else(|| {
+                        invalid("CUDA GPT Step v2 I/O Binding was not initialized")
+                    })?;
+                    let (next_values, next_ids, next_key, next_value, _spans) = profile
+                        .measure_gpt_step(|| {
+                            run_gpt_step_v2_cuda(
+                                self.step
+                                    .as_mut()
+                                    .ok_or_else(|| invalid("CUDA GPT Step Session is missing"))?,
+                                &mut bindings[slot],
+                                sample,
+                                idx_input,
+                                &x_len,
+                                &y_len,
+                                key,
+                                value,
+                                reuse_cuda_step_bindings,
+                                sync_probe,
+                            )
+                        })?;
+                    #[cfg(feature = "r0-profiling")]
+                    {
+                        profile.record_gpt_step_event(
+                            ProfilePhase::GptStepBindingUpdate,
+                            _spans.binding_update,
+                        );
+                        profile.record_gpt_step_event(ProfilePhase::GptStepOrtRun, _spans.ort_run);
+                        profile
+                            .record_gpt_step_event(ProfilePhase::GptStepSyncWait, _spans.sync_wait);
+                        profile.record_gpt_step_event(
+                            ProfilePhase::GptStepOutputCheck,
+                            _spans.output_check,
+                        );
+                    }
+                    (values, ids) = profile.measure(ProfilePhase::GptStepOutput, || {
+                        Ok::<_, crate::Error>((next_values, next_ids))
+                    })?;
+                    *key = next_key;
+                    *value = next_value;
+                    *next_binding = 1 - slot;
+                    #[cfg(feature = "r0-profiling")]
+                    profile.add_cuda_kv_cache_step();
+                } else {
+                    (values, ids, kv_cache) = profile.measure_gpt_step(|| {
+                        run_gpt_step_cpu(
+                            self.step
+                                .as_mut()
+                                .ok_or_else(|| invalid("ORT GPT Step Session is missing"))?,
                             sample,
                             idx_input,
                             &x_len,
                             &y_len,
-                            key,
-                            value,
+                            &kv_cache,
+                            self.step_cache_layout,
                         )
                     })?;
-                (values, ids) = profile.measure(ProfilePhase::GptStepOutput, || {
-                    Ok::<_, crate::Error>((next_values, next_ids))
-                })?;
-                *key = next_key;
-                *value = next_value;
-                *next_binding = 1 - slot;
-                #[cfg(feature = "r0-profiling")]
-                profile.add_cuda_kv_cache_step();
-            } else {
-                (values, ids, kv_cache) = profile.measure_gpt_step(|| {
-                    run_gpt_step_cpu(
-                        &mut self.step,
-                        sample,
-                        idx_input,
-                        &x_len,
-                        &y_len,
-                        &kv_cache,
-                        self.step_cache_layout,
-                    )
-                })?;
-            }
-            #[cfg(not(feature = "r1-cuda-ep"))]
-            {
-                (values, ids, kv_cache) = profile.measure_gpt_step(|| {
-                    run_gpt_step_cpu(
-                        &mut self.step,
-                        sample,
-                        idx_input,
-                        &x_len,
-                        &y_len,
-                        &kv_cache,
-                        self.step_cache_layout,
-                    )
-                })?;
+                }
+                #[cfg(not(feature = "r1-cuda-ep"))]
+                {
+                    (values, ids, kv_cache) = profile.measure_gpt_step(|| {
+                        run_gpt_step_cpu(
+                            self.step
+                                .as_mut()
+                                .ok_or_else(|| invalid("ORT GPT Step Session is missing"))?,
+                            sample,
+                            idx_input,
+                            &x_len,
+                            &y_len,
+                            &kv_cache,
+                            self.step_cache_layout,
+                        )
+                    })?;
+                }
             }
             #[cfg(feature = "r0-profiling")]
             profile.add_gpt_step();
             if self.streaming && tokens.len() >= next_audio_tokens {
+                let is_preview_attempt = preview_pending;
                 let decode_started = Instant::now();
                 let first_vits_event = (audio_chunks == 0).then(|| profile.start_event()).flatten();
-                let audio = decoder.decode(
-                    &mut self.sovits,
-                    &tokens,
-                    &phones,
-                    &self.spec,
-                    &self.sv,
-                    false,
-                    cuda_vits_active,
-                    cancel,
-                    profile,
-                )?;
+                let audio = if let Some(bounded_state) = bounded_preview_state.take() {
+                    decoder.reset_unemitted_preview();
+                    let refilled = decoder.decode(
+                        &mut self.sovits,
+                        &tokens,
+                        &phones,
+                        &self.spec,
+                        &self.sv,
+                        false,
+                        cuda_vits_active,
+                        cancel,
+                        profile,
+                    )?;
+                    let join = find_bounded_preview_join(
+                        &bounded_state.decoded_pcm,
+                        &refilled,
+                        bounded_state.committed_samples,
+                    );
+                    if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                        diagnostics.full_prefix_refill = true;
+                        diagnostics.bounded_join = join.clone();
+                    }
+                    let Some(mut join) = join.filter(|join| join.accepted) else {
+                        if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                            diagnostics.refill_rejected_reason =
+                                Some("no_high_confidence_uncommitted_tail_alignment");
+                            diagnostics.semantic_tokens = tokens.len();
+                            diagnostics.semantic_token_hash = semantic_token_hash(&tokens);
+                        }
+                        return Err(invalid(
+                            "R1.9 bounded Preview Refill rejected: no high-confidence join",
+                        ));
+                    };
+                    let stitched = stitch_bounded_preview(
+                        &bounded_state.decoded_pcm,
+                        &refilled,
+                        bounded_state.committed_samples,
+                        &mut join,
+                    );
+                    if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                        diagnostics.full_prefix_refill = true;
+                        diagnostics.bounded_join = Some(join);
+                    }
+                    stitched
+                } else {
+                    decoder.decode(
+                        &mut self.sovits,
+                        &tokens,
+                        &phones,
+                        &self.spec,
+                        &self.sv,
+                        false,
+                        cuda_vits_active,
+                        cancel,
+                        profile,
+                    )?
+                };
                 profile.finish_event("first_vits", first_vits_event, Some(audio_chunks));
                 vocoder_ms += decode_started.elapsed().as_secs_f64() * 1000.0;
                 check(cancel)?;
+                let mut bounded_callback_audio: Option<Vec<f32>> = None;
+                if is_preview_attempt {
+                    if let Some(reason) = preview_fallback_reason(&audio) {
+                        if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                            diagnostics.preview_fallback_reason = Some(reason);
+                            diagnostics.preview_decoded_samples =
+                                Some(audio.len() + decoder.pending_audio_tail().len());
+                            diagnostics.preview_committed_samples = Some(0);
+                            diagnostics.preview_uncommitted_samples =
+                                diagnostics.preview_decoded_samples;
+                        }
+                        decoder.reset_unemitted_preview();
+                        preview_pending = false;
+                        next_audio_tokens = preview_refill_at
+                            .unwrap_or_else(|| next_audio_tokens.saturating_add(chunk_tokens));
+                        continue;
+                    }
+                    if let Some(publish_after_onset_ms) = bounded_preview_after_onset_ms {
+                        if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                            diagnostics.preview_decoded_samples =
+                                Some(audio.len() + decoder.pending_audio_tail().len());
+                            diagnostics.preview_committed_samples = Some(0);
+                            diagnostics.preview_uncommitted_samples =
+                                diagnostics.preview_decoded_samples;
+                        }
+                        let onset = first_voice_sample(&audio);
+                        if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                            diagnostics.preview_voice_onset_samples = onset;
+                        }
+                        let Some(onset) =
+                            onset.filter(|sample| *sample <= R1_9_MAX_VOICE_ONSET_MS * 32)
+                        else {
+                            if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                                diagnostics.preview_fallback_reason =
+                                    Some("voice_onset_missing_or_after_160ms");
+                            }
+                            decoder.reset_unemitted_preview();
+                            preview_pending = false;
+                            next_audio_tokens = preview_refill_at
+                                .unwrap_or_else(|| next_audio_tokens.saturating_add(chunk_tokens));
+                            continue;
+                        };
+                        let requested_commit = onset.saturating_add(publish_after_onset_ms * 32);
+                        if requested_commit > R1_9_MAX_COMMIT_MS * 32 {
+                            if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                                diagnostics.preview_fallback_reason =
+                                    Some("onset_relative_publish_window_exceeds_240ms");
+                            }
+                            decoder.reset_unemitted_preview();
+                            preview_pending = false;
+                            next_audio_tokens = preview_refill_at
+                                .unwrap_or_else(|| next_audio_tokens.saturating_add(chunk_tokens));
+                            continue;
+                        }
+                        let commit_samples =
+                            requested_commit.max(R1_9_MIN_COMMIT_MS * 32).div_ceil(320) * 320;
+                        if commit_samples >= audio.len() {
+                            if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                                diagnostics.preview_fallback_reason =
+                                    Some("publish_window_consumes_preview");
+                            }
+                            decoder.reset_unemitted_preview();
+                            preview_pending = false;
+                            next_audio_tokens = preview_refill_at
+                                .unwrap_or_else(|| next_audio_tokens.saturating_add(chunk_tokens));
+                            continue;
+                        }
+                        let mut decoded_pcm = audio.clone();
+                        decoded_pcm.extend_from_slice(decoder.pending_audio_tail());
+                        bounded_preview_state = Some(BoundedPreviewState {
+                            decoded_pcm,
+                            committed_samples: commit_samples,
+                        });
+                        bounded_callback_audio = Some(audio[..commit_samples].to_vec());
+                        if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                            diagnostics.preview_decoded_samples =
+                                Some(audio.len() + decoder.pending_audio_tail().len());
+                            diagnostics.preview_committed_samples = Some(commit_samples);
+                            diagnostics.preview_uncommitted_samples = Some(
+                                audio.len() + decoder.pending_audio_tail().len() - commit_samples,
+                            );
+                        }
+                    }
+                    if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                        diagnostics.preview_callback_tokens = Some(tokens.len());
+                    }
+                    preview_pending = false;
+                }
+                if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+                    if let Some(alignment) = decoder.take_sola_alignment() {
+                        diagnostics.sola_alignments.push(alignment);
+                    }
+                }
                 if first_audio_tokens == 0 {
                     first_audio_tokens = tokens.len();
                 }
@@ -1045,7 +2149,7 @@ impl NativeTts {
                 let delivery_started = Instant::now();
                 profile.measure(ProfilePhase::AudioCallback, || {
                     emit(
-                        &audio,
+                        bounded_callback_audio.as_deref().unwrap_or(&audio),
                         ChunkInfo {
                             semantic_tokens: tokens.len(),
                             final_chunk: false,
@@ -1055,7 +2159,12 @@ impl NativeTts {
                 profile.mark_first_audio();
                 delivery_ms += delivery_started.elapsed().as_secs_f64() * 1000.0;
                 check(cancel)?;
-                next_audio_tokens = next_audio_tokens.saturating_add(chunk_tokens);
+                next_audio_tokens = if is_preview_attempt {
+                    preview_refill_at
+                        .unwrap_or_else(|| next_audio_tokens.saturating_add(chunk_tokens))
+                } else {
+                    next_audio_tokens.saturating_add(chunk_tokens)
+                };
             }
         }
         check(cancel)?;
@@ -1063,6 +2172,10 @@ impl NativeTts {
             return Err(invalid(
                 "semantic generation did not finish within the cache budget; shorten the sentence",
             ));
+        }
+        if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+            diagnostics.semantic_tokens = tokens.len();
+            diagnostics.semantic_token_hash = semantic_token_hash(&tokens);
         }
         #[cfg(feature = "r0-profiling")]
         profile.record_semantic_tokens(&tokens);
@@ -1114,6 +2227,11 @@ impl NativeTts {
             let _ = sample_count;
             samples
         };
+        if let Some(diagnostics) = preview_diagnostics.as_deref_mut() {
+            if let Some(alignment) = decoder.take_sola_alignment() {
+                diagnostics.sola_alignments.push(alignment);
+            }
+        }
         vocoder_ms += started.elapsed().as_secs_f64() * 1000.0;
         check(cancel)?;
         if samples.is_empty() || samples.iter().any(|x| !x.is_finite()) {
@@ -1144,6 +2262,17 @@ impl NativeTts {
             audio_chunks,
         })
     }
+}
+
+fn semantic_token_hash(tokens: &[i64]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for token in tokens {
+        for byte in token.to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
 }
 
 fn split_cache_layers(value: DynValue, cache_name: &str) -> Result<Vec<DynValue>> {
@@ -1234,6 +2363,17 @@ fn run_gpt_step_cpu(
         }
         GptKvCache::CudaAbi1PingPong { .. } => {
             return Err(invalid("CUDA KV cache reached the CPU Session::run path"));
+        }
+        GptKvCache::CudaV2Initial { .. } | GptKvCache::CudaV2PerLayer { .. } => {
+            return Err(invalid(
+                "CUDA GPT Step v2 cache reached the CPU Session::run path",
+            ));
+        }
+        #[cfg(feature = "r2-trt-native")]
+        GptKvCache::TensorRtNative => {
+            return Err(invalid(
+                "native TensorRT cache reached the ORT Session::run path",
+            ));
         }
     };
     let values = take(&mut outputs, "topk_values")?;

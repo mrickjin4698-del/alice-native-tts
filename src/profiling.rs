@@ -9,7 +9,7 @@ use std::time::Instant;
 #[cfg(feature = "r0-profiling")]
 use serde::Serialize;
 
-const PHASE_COUNT: usize = 30;
+const PHASE_COUNT: usize = 35;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(usize)]
@@ -44,6 +44,11 @@ pub enum ProfilePhase {
     FrontendCacheLookup = 27,
     FrontendCacheStore = 28,
     FrontendParallelRun = 29,
+    GptStepBindingUpdate = 30,
+    GptStepOrtRun = 31,
+    GptStepSyncWait = 32,
+    GptStepOutputCheck = 33,
+    GptStepRequestBindings = 34,
 }
 
 impl ProfilePhase {
@@ -78,6 +83,11 @@ impl ProfilePhase {
         Self::FrontendCacheLookup,
         Self::FrontendCacheStore,
         Self::FrontendParallelRun,
+        Self::GptStepBindingUpdate,
+        Self::GptStepOrtRun,
+        Self::GptStepSyncWait,
+        Self::GptStepOutputCheck,
+        Self::GptStepRequestBindings,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -112,6 +122,11 @@ impl ProfilePhase {
             Self::FrontendCacheLookup => "frontend_cache_lookup",
             Self::FrontendCacheStore => "frontend_cache_store",
             Self::FrontendParallelRun => "frontend_parallel_run",
+            Self::GptStepBindingUpdate => "gpt_step_binding_update",
+            Self::GptStepOrtRun => "gpt_step_ort_run",
+            Self::GptStepSyncWait => "gpt_step_sync_wait",
+            Self::GptStepOutputCheck => "gpt_step_output_check",
+            Self::GptStepRequestBindings => "gpt_step_request_bindings",
         }
     }
 }
@@ -506,6 +521,31 @@ impl ProfileCollector {
                     end_ms: ended.duration_since(self.request_started).as_secs_f64() * 1000.0,
                     index: None,
                 });
+            }
+        }
+    }
+
+    #[cfg(all(feature = "r0-profiling", feature = "r1-cuda-ep"))]
+    pub(crate) fn record_gpt_step_event(
+        &mut self,
+        phase: ProfilePhase,
+        span: Option<(std::time::Instant, std::time::Instant)>,
+    ) {
+        #[cfg(not(feature = "r0-profiling"))]
+        let _ = (phase, span);
+        #[cfg(feature = "r0-profiling")]
+        if self.enabled {
+            if let Some((started, ended)) = span {
+                self.elapsed_ns[phase as usize] += ended.duration_since(started).as_nanos() as u64;
+                if !self.timeline_stopped {
+                    self.timeline.push(TimelineEvent {
+                        event: phase.label().to_owned(),
+                        start_ms: started.duration_since(self.request_started).as_secs_f64()
+                            * 1000.0,
+                        end_ms: ended.duration_since(self.request_started).as_secs_f64() * 1000.0,
+                        index: Some(self.gpt_step_iterations as usize),
+                    });
+                }
             }
         }
     }

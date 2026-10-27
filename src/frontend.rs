@@ -105,6 +105,8 @@ fn backend_cache_tag(backend: Backend) -> u8 {
         Backend::Cuda => 2,
         #[cfg(feature = "r1-tensorrt-ep")]
         Backend::TensorRt => 3,
+        #[cfg(feature = "r2-trt-native")]
+        Backend::TensorRtNative => 4,
     }
 }
 

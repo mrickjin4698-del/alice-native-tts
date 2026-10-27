@@ -14,8 +14,13 @@ resolver = "2"
 [features]
 r0-profiling = []
 r1-gpt-step-v2 = []
+r1-r8-preview = []
+r1-r9-bounded-preview = []
+r2-0-first-audible = ["r1-cuda-ep"]
 r1-cuda-ep = ["ort/cuda", "ort/load-dynamic"]
 r1-tensorrt-ep = ["r1-cuda-ep", "ort/tensorrt"]
+r2-trt-native = ["ort/load-dynamic"]
+r2-trt-native-cuda-vits = ["r2-trt-native", "r1-cuda-ep"]
 
 [dependencies]
 ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
@@ -25,6 +30,9 @@ serde_json = "1"
 hound = "3.5"
 thiserror = "2"
 regex = "1"
+
+[build-dependencies]
+cc = "1.4"
 
 [dev-dependencies]
 tempfile = "3"
@@ -40,6 +48,38 @@ required-features = ["r0-profiling", "r1-cuda-ep"]
 [[example]]
 name = "r1_4_profile"
 required-features = ["r0-profiling", "r1-cuda-ep"]
+
+[[example]]
+name = "r1_5_profile"
+required-features = ["r0-profiling", "r1-cuda-ep"]
+
+[[example]]
+name = "r1_5_trt_smoke"
+required-features = ["r1-tensorrt-ep"]
+
+[[example]]
+name = "r1_6_kernel_trace"
+required-features = ["r1-cuda-ep"]
+
+[[example]]
+name = "r1_7_copy_trace"
+required-features = ["r1-cuda-ep"]
+
+[[example]]
+name = "r1_8_preview_refill"
+required-features = ["r1-cuda-ep", "r1-r8-preview"]
+
+[[example]]
+name = "r1_9_bounded_preview"
+required-features = ["r1-cuda-ep", "r1-r8-preview", "r1-r9-bounded-preview"]
+
+[[example]]
+name = "r2_0_first_audible"
+required-features = ["r2-0-first-audible"]
+
+[[example]]
+name = "r2_1_trt_native_cancel"
+required-features = ["r2-trt-native"]
 
 [[example]]
 name = "cuda_smoke"

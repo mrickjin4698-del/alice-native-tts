@@ -4,11 +4,16 @@ use std::{path::PathBuf, time::Instant};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 4 {
-        return Err("usage: synthesize PACK TEXT OUTPUT.wav [cpu|directml] [cancel-ms]".into());
+        return Err(
+            "usage: synthesize PACK TEXT OUTPUT.wav [cpu|directml|tensor_rt_native] [cancel-ms]"
+                .into(),
+        );
     }
     let backend = match args.get(4).map(String::as_str).unwrap_or("cpu") {
         "cpu" => Backend::Cpu,
         "directml" => Backend::Directml,
+        #[cfg(feature = "r2-trt-native")]
+        "tensor_rt_native" => Backend::TensorRtNative,
         value => return Err(format!("unsupported backend: {value}").into()),
     };
     let config = Config {

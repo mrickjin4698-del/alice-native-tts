@@ -3,6 +3,10 @@
 mod audio;
 mod frontend;
 mod inference;
+#[cfg(feature = "r2-trt-native")]
+mod native_trt;
+#[cfg(all(feature = "r1-cuda-ep", windows))]
+mod nvtx;
 pub mod profiling;
 mod streaming;
 pub use frontend::normalize::normalize as normalize_text;
@@ -68,9 +72,11 @@ pub struct Config {
 }
 
 /// CPU remains the portable default. DirectML keeps GPT on CPU. The opt-in
-/// CUDA/TensorRT R1 backends target GPT Encoder and GPT Step; frontend and
-/// vocoder sessions remain explicitly on CPU. Unsupported GPT nodes fail
-/// instead of silently falling back to the CPU EP.
+/// CUDA/TensorRT EP backends target GPT Encoder and GPT Step; frontend and
+/// vocoder sessions remain on CPU unless the VITS CUDA option is enabled. The
+/// separately feature-gated native TensorRT 11 backend targets GPT Encoder and
+/// GPT Step on Windows x64. GPU backends reject unsupported nodes rather than
+/// silently falling back to the CPU EP.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Backend {
@@ -81,6 +87,9 @@ pub enum Backend {
     Cuda,
     #[cfg(feature = "r1-tensorrt-ep")]
     TensorRt,
+    /// Native TensorRT 11 execution for GPT Encoder and Step, behind an opt-in feature.
+    #[cfg(feature = "r2-trt-native")]
+    TensorRtNative,
 }
 
 #[derive(Deserialize)]
