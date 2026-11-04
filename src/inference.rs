@@ -398,6 +398,40 @@ fn non_gpt_backend(backend: Backend) -> Backend {
     backend
 }
 
+fn frontend_execution_backend(backend: Backend) -> Result<Backend> {
+    let fallback = non_gpt_backend(backend);
+    if std::env::var("ALICE_NATIVE_TTS_CUDA_FRONTEND")
+        .ok()
+        .as_deref()
+        != Some("1")
+    {
+        return Ok(fallback);
+    }
+
+    #[cfg(feature = "r1-cuda-ep")]
+    {
+        #[cfg(feature = "r2-trt-native")]
+        let native_trt = backend == Backend::TensorRtNative;
+        #[cfg(not(feature = "r2-trt-native"))]
+        let native_trt = false;
+        if is_cuda_backend(backend) || native_trt {
+            return Ok(Backend::Cuda);
+        }
+        return Ok(fallback);
+    }
+
+    #[cfg(not(feature = "r1-cuda-ep"))]
+    {
+        #[cfg(feature = "r2-trt-native")]
+        if backend == Backend::TensorRtNative {
+            return Err(invalid(
+                "ALICE_NATIVE_TTS_CUDA_FRONTEND=1 requires the r1-cuda-ep feature",
+            ));
+        }
+        Ok(fallback)
+    }
+}
+
 fn gpt_backend(backend: Backend) -> Backend {
     match backend {
         #[cfg(feature = "r1-cuda-ep")]
@@ -1089,6 +1123,7 @@ impl NativeTts {
         let (wav16, wav32) = audio::reference(&reference_path)?;
         drop(_trace);
         let frontend_backend = non_gpt_backend(config.backend);
+        let frontend_session_backend = frontend_execution_backend(config.backend)?;
         #[cfg(feature = "r2-trt-native")]
         let native_trt_enabled = config.backend == Backend::TensorRtNative;
         #[cfg(not(feature = "r2-trt-native"))]
@@ -1107,7 +1142,7 @@ impl NativeTts {
             frontend_backend
         };
         let _trace = LoadTrace::begin("frontend_session_load");
-        let mut frontend = Frontend::load(dir, frontend_backend)?;
+        let mut frontend = Frontend::load(dir, frontend_session_backend)?;
         drop(_trace);
         check(cancel)?;
         let _trace = LoadTrace::begin("frontend_reference_process");

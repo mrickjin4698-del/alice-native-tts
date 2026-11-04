@@ -94,6 +94,28 @@ and the mixed route is still experimental pending listening and playback
 validation. See the [R2.2 report](docs/performance-r2.2.md) for measured
 results and the observed execution-provider node split.
 
+### Cold Chinese text frontend
+
+For a new Chinese text on a loaded `tensor_rt_native` or CUDA backend, the
+optional CUDA G2PW + BERT frontend avoids the CPU cold-miss cost. Build with
+`r1-cuda-ep` (the `r2-trt-native-cuda-vits` feature already includes it), then
+set these variables before creating `NativeTts`:
+
+```powershell
+$env:ALICE_NATIVE_TTS_CUDA_FRONTEND = "1"
+$env:ALICE_NATIVE_TTS_FRONTEND_CUDA_DIAGNOSTIC_ALLOW_CPU = "1"
+```
+
+The first variable selects CUDA for both G2PW and BERT unless a per-graph
+`ALICE_NATIVE_TTS_FRONTEND_G2PW_BACKEND` or
+`ALICE_NATIVE_TTS_FRONTEND_BERT_BACKEND` override is present. The second allows
+the audited shape/helper nodes to remain on CPU; the main graph math stays on
+CUDA. Without that explicit helper setting, ORT rejects CPU-assigned nodes at
+session creation instead of silently falling back. CPU and DirectML defaults
+are unchanged; selecting CPU or DirectML keeps those Frontend paths. The
+measured cold-text results and limits are in the
+[R2.3 report](docs/performance-r2.3.md).
+
 To cancel after a number of milliseconds, pass the backend first and duration second:
 
 ```powershell

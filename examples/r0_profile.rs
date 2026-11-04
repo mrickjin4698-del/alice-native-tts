@@ -81,7 +81,7 @@ const TEXT: &str = "今天我们测试第二版语音，后面的内容会继续
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
     if args.len() < 4 {
-        return Err("usage: r0_profile PACK OUTPUT_DIR cpu|directml|cuda|tensor_rt|tensor_rt_native [--chunks=8,16,24,32] [--repeats=20] [--warmups=1] [--ort-profile] [--cuda-vits] [--cuda-vits-allow-cpu] [--gpu-diagnostic-allow-cpu]".into());
+        return Err("usage: r0_profile PACK OUTPUT_DIR cpu|directml|cuda|tensor_rt|tensor_rt_native [--chunks=8,16,24,32] [--repeats=20] [--warmups=1] [--ort-profile] [--text=TEXT] [--frontend=cpu|cuda] [--frontend-allow-cpu] [--frontend-cache-miss] [--cuda-vits] [--cuda-vits-allow-cpu] [--gpu-diagnostic-allow-cpu]".into());
     }
     let pack = PathBuf::from(&args[1]);
     let output = PathBuf::from(&args[2]);
@@ -90,6 +90,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut repeats = 20usize;
     let mut warmups = 1usize;
     let mut ort_profile = false;
+    let mut text = TEXT.to_owned();
+    let mut frontend_backend: Option<String> = None;
+    let mut frontend_allow_cpu_nodes = false;
+    let mut frontend_cache_miss = false;
     let mut cuda_vits = std::env::var("ALICE_NATIVE_TTS_CUDA_VITS").ok().as_deref() == Some("1");
     let mut cuda_vits_allow_cpu_nodes =
         std::env::var("ALICE_NATIVE_TTS_CUDA_VITS_DIAGNOSTIC_ALLOW_CPU")
@@ -107,6 +111,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             repeats = value.parse()?;
         } else if let Some(value) = arg.strip_prefix("--warmups=") {
             warmups = value.parse()?;
+        } else if let Some(value) = arg.strip_prefix("--text=") {
+            if value.trim().is_empty() {
+                return Err("--text must not be empty".into());
+            }
+            text = value.to_owned();
+        } else if let Some(value) = arg.strip_prefix("--frontend=") {
+            if !["cpu", "cuda"].contains(&value) {
+                return Err("--frontend must be cpu or cuda".into());
+            }
+            frontend_backend = Some(value.to_owned());
+        } else if arg == "--frontend-allow-cpu" {
+            frontend_allow_cpu_nodes = true;
+        } else if arg == "--frontend-cache-miss" {
+            frontend_cache_miss = true;
         } else if arg == "--ort-profile" {
             ort_profile = true;
         } else if arg == "--cuda-vits" {
@@ -125,6 +143,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if repeats == 0 {
         return Err("repeats must be at least 1".into());
     }
+    if frontend_allow_cpu_nodes && frontend_backend.as_deref() != Some("cuda") {
+        return Err("--frontend-allow-cpu requires --frontend=cuda".into());
+    }
+    #[cfg(not(feature = "r1-cuda-ep"))]
+    if frontend_backend.as_deref() == Some("cuda") {
+        return Err("--frontend=cuda requires the r1-cuda-ep feature".into());
+    }
     if gpu_diagnostic_allow_cpu
         && (!ort_profile || !matches!(args[3].as_str(), "cuda" | "tensor_rt"))
     {
@@ -137,6 +162,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var("ALICE_NATIVE_TTS_GPU_DIAGNOSTIC_ALLOW_CPU", "1");
         std::env::set_var("ALICE_NATIVE_TTS_CUDA_VITS_DIAGNOSTIC_ALLOW_CPU", "1");
         eprintln!("GPU diagnostic mode: audited Encoder helper nodes and VITS nodes may run on CPU; GPT Step remains strict CUDA-only.");
+    }
+    if let Some(frontend_backend) = frontend_backend.as_deref() {
+        std::env::set_var("ALICE_NATIVE_TTS_FRONTEND_G2PW_BACKEND", frontend_backend);
+        std::env::set_var("ALICE_NATIVE_TTS_FRONTEND_BERT_BACKEND", frontend_backend);
+        std::env::set_var(
+            "ALICE_NATIVE_TTS_CUDA_FRONTEND",
+            if frontend_backend == "cuda" { "1" } else { "0" },
+        );
+        if frontend_backend == "cuda" {
+            std::env::set_var(
+                "ALICE_NATIVE_TTS_FRONTEND_CUDA_DIAGNOSTIC_ALLOW_CPU",
+                if frontend_allow_cpu_nodes { "1" } else { "0" },
+            );
+        }
+    }
+    if frontend_cache_miss {
+        std::env::set_var("ALICE_NATIVE_TTS_FRONTEND_CACHE", "1");
+        std::env::set_var("ALICE_NATIVE_TTS_FRONTEND_CACHE_FORCE_MISS", "1");
     }
     if cuda_vits {
         if !matches!(args[3].as_str(), "cuda" | "tensor_rt_native") {
@@ -159,6 +202,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok()
             .as_deref()
             == Some("1");
+    let frontend_g2pw_backend = std::env::var("ALICE_NATIVE_TTS_FRONTEND_G2PW_BACKEND")
+        .unwrap_or_else(|_| "inherited".to_owned());
+    let frontend_bert_backend = std::env::var("ALICE_NATIVE_TTS_FRONTEND_BERT_BACKEND")
+        .unwrap_or_else(|_| "inherited".to_owned());
+    let frontend_cuda_cpu_fallback_opt_in =
+        std::env::var("ALICE_NATIVE_TTS_FRONTEND_CUDA_DIAGNOSTIC_ALLOW_CPU")
+            .ok()
+            .as_deref()
+            == Some("1");
+    let cuda_frontend_requested = std::env::var("ALICE_NATIVE_TTS_CUDA_FRONTEND")
+        .ok()
+        .as_deref()
+        == Some("1");
     let backend_value = serde_json::to_value(backend)?;
     let ort_cuda_gpt = matches!(backend_value.as_str(), Some("cuda" | "tensor_rt"));
     #[cfg(feature = "r2-trt-native")]
@@ -220,7 +276,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut rows = Vec::new();
         if !ort_profile {
             for _ in 0..warmups {
-                synthesize_once(&mut model, chunk_tokens, None)?;
+                synthesize_once(&mut model, chunk_tokens, &text, None)?;
             }
         }
         let sample_count = if ort_profile { 1 } else { repeats };
@@ -233,7 +289,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 None
             };
-            match synthesize_once(&mut model, chunk_tokens, wav_path.as_deref()) {
+            match synthesize_once(&mut model, chunk_tokens, &text, wav_path.as_deref()) {
                 Ok(row) => rows.push(row),
                 Err(error) => {
                     if ort_profile {
@@ -262,7 +318,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let allocation_probe = if !ort_profile {
             reset_allocation_stats();
             enable_allocation_capture(true);
-            let result = synthesize_once(&mut model, chunk_tokens, None);
+            let result = synthesize_once(&mut model, chunk_tokens, &text, None);
             enable_allocation_capture(false);
             let row = result?;
             Some(json!({"run": row, "rust_global_allocator": allocation_snapshot()}))
@@ -275,7 +331,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let report = json!({
             "backend": backend,
             "chunk_tokens": chunk_tokens,
-            "text": TEXT,
+            "text": text,
             "model_load_ms": load_ms,
             "warmup_runs": if ort_profile { 0 } else { warmups },
             "gpt_step_graph": step_graph,
@@ -285,6 +341,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "gpu_diagnostic_allow_cpu": gpu_diagnostic_allow_cpu,
             "cuda_vits_requested": cuda_vits,
             "vits_backend": if cuda_vits { "cuda" } else { "cpu" },
+            "cuda_frontend_requested": cuda_frontend_requested,
+            "frontend_g2pw_backend": frontend_g2pw_backend,
+            "frontend_bert_backend": frontend_bert_backend,
+            "frontend_cuda_cpu_fallback_opt_in": frontend_cuda_cpu_fallback_opt_in,
+            "frontend_cache_miss_forced": frontend_cache_miss,
             "gpu_encoder_cpu_helper_opt_in": gpu_encoder_cpu_helper_opt_in,
             "gpu_gpt_step_cpu_fallback_disabled": has_gpu_gpt_backend,
             "cuda_vits_cpu_fallback_opt_in": cuda_vits_cpu_fallback_opt_in,
@@ -347,6 +408,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "gpu_diagnostic_allow_cpu": gpu_diagnostic_allow_cpu,
         "cuda_vits_requested": cuda_vits,
         "vits_backend": if cuda_vits { "cuda" } else { "cpu" },
+        "cuda_frontend_requested": cuda_frontend_requested,
+        "frontend_g2pw_backend": frontend_g2pw_backend,
+        "frontend_bert_backend": frontend_bert_backend,
+        "frontend_cuda_cpu_fallback_opt_in": frontend_cuda_cpu_fallback_opt_in,
+        "frontend_cache_miss_forced": frontend_cache_miss,
         "gpu_encoder_cpu_helper_opt_in": gpu_encoder_cpu_helper_opt_in,
         "gpu_gpt_step_cpu_fallback_disabled": has_gpu_gpt_backend,
         "cuda_vits_cpu_fallback_opt_in": cuda_vits_cpu_fallback_opt_in,
@@ -365,6 +431,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn synthesize_once(
     model: &mut NativeTts,
     chunk_tokens: usize,
+    text: &str,
     audio_file: Option<&Path>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let started = Instant::now();
@@ -372,7 +439,7 @@ fn synthesize_once(
     let mut samples = Vec::new();
     let mut chunks = Vec::new();
     let (synthesis, profile) =
-        model.synthesize_streaming_r0(TEXT, &|| false, chunk_tokens, |audio, info| {
+        model.synthesize_streaming_r0(text, &|| false, chunk_tokens, |audio, info| {
             let at_ms = started.elapsed().as_secs_f64() * 1000.0;
             first_audio_ms.get_or_insert(at_ms);
             chunks.push(json!({
