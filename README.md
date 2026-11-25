@@ -4,7 +4,7 @@
 
 ## Overview
 
-Alice Native TTS runs GPT-SoVITS and Irodori-TTS locally as a Rust library and a standalone
+Alice Native TTS runs GPT-SoVITS, Irodori-TTS and Drama 3 locally as a Rust library and a standalone
 `alice-tts` executable. It can write a WAV, stream PCM from a persistent JSONL
 worker, or deliver PCM chunks directly to a Rust application. A caller can
 cancel a request and reuse the session.
@@ -15,11 +15,12 @@ cancel a request and reuse the session.
 | Native ONNX pack, ABI-2 | v3, v4, V5 Turbo, V5 Dev | Text fragments at 24 kHz for v3 and 48 kHz for the others. Optional early PCM for V5 |
 | Checkpoint manifest | v1, v2, v2Pro, v2ProPlus, v3, v4, V5 Turbo, V5 Dev | Uses a local GPT-SoVITS Python runtime. The model family determines the sample rate and streaming mode |
 | Irodori checkpoint manifest | Irodori-TTS v4.1 Small | Japanese synthesis. One PCM chunk per utterance from a persistent local Python worker |
+| Drama 3 GGUF manifest | Drama 3 Q2 | 44.1 kHz semantic-token streaming from a resident audio.cpp session |
 
 Native packs use Rust and the selected inference libraries at runtime. The
 native frontend handles Mandarin and English, including common number, date,
-time and currency formats. Bring compatible model files and a reference
-recording with its transcript.
+time and currency formats. Supply compatible model files and any reference
+recording required by the model.
 
 ## Benchmarks
 
@@ -29,6 +30,22 @@ the delay from request submission to the first audio chunk. **Completion** is
 the delay to the `done` event. **RTF** is completion time divided by the duration
 of the returned audio. Timings exclude model loading, engine builds and
 device playback.
+
+### Drama 3 Q2 · November 25, 2026
+
+Same local Q2_K GGUF and audio.cpp CUDA build, with six warm requests per
+configuration through the JSONL worker. The tuned preset uses 16 CPU expert
+layers, six threads and `cuda_perf`. The baseline uses 24 layers and eight
+threads.
+
+| Standard Mandarin sentence | First PCM P50 | Estimated audible onset P50 | Completion P50 | RTF |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline | 179.2 ms | 449.9 ms | 3.69 s | 0.691 |
+| Tuned CUDA | **150.3 ms** | **200.3 ms** | **2.82 s** | **0.490** |
+
+The tuned preset uses about 2 GiB more GPU memory. Across four inputs, completion
+improves 1.16–1.45×. Audible onset depends on the pause generated before speech.
+[All inputs, memory measurements and reproduction](docs/performance-drama3-q2.md)
 
 ### Irodori-TTS v4.1 Small · November 25, 2026
 
@@ -180,6 +197,7 @@ frontend assets and reference data. ABI-1 token streaming adds a validated
 - **Export ABI-2** from local v3–V5 checkpoints, the reference WAV and a matching GPT graph set. Choose FP32 for CPU or FP16 for the CUDA/TensorRT setup. [Native diffusion guide](docs/native-diffusion.md)
 - **Use checkpoints directly** by putting the family, weight paths, reference WAV and transcript in a manifest. The CLI starts the matching local GPT-SoVITS runtime. [Manifest and dependency setup](docs/standalone.md#gpt-sovits-checkpoint)
 - **Run Irodori-TTS** with a v4.1 Small checkpoint and its DACVAE codec. Supply a reference WAV or style caption when needed. [Irodori-TTS setup](docs/standalone.md#irodori-tts)
+- **Run Drama 3** with a local Q2 GGUF and audio.cpp 0.9.4. Use the same WAV and JSONL commands. [Drama 3 setup](docs/standalone.md#drama-3-q2)
 
 The native GPT cache has 512 positions shared by the reference, input text
 and generated tokens. Split long input into shorter passages when using a

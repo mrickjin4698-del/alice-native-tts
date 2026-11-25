@@ -2,6 +2,7 @@
 
 mod checkpoint;
 mod diffusion;
+mod drama3;
 mod irodori;
 mod python_worker;
 
@@ -59,6 +60,8 @@ pub enum ModelFamily {
     V5Dev,
     #[serde(rename = "irodori")]
     Irodori,
+    #[serde(rename = "drama3")]
+    Drama3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -68,6 +71,7 @@ pub enum Runtime {
     GptSovitsCheckpoint,
     IrodoriTts,
     IrodoriTensorRt,
+    AudioCpp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -156,6 +160,7 @@ enum ModelSource {
     Diffusion(PathBuf, Box<diffusion::Pack>),
     Checkpoint(Box<CheckpointManifest>),
     Irodori(Box<irodori::Manifest>),
+    Drama3(Box<drama3::Manifest>),
 }
 
 /// A validated native pack directory or a schema-versioned model manifest.
@@ -216,6 +221,13 @@ impl Model {
                 source: ModelSource::Irodori(Box::new(manifest)),
             });
         }
+        if header.family == ModelFamily::Drama3 {
+            let manifest = drama3::Manifest::open(parent, &source)?;
+            return Ok(Self {
+                info: manifest.info(),
+                source: ModelSource::Drama3(Box::new(manifest)),
+            });
+        }
         let mut manifest: CheckpointManifest = serde_json::from_slice(&source)?;
         if manifest.schema_version != 1 {
             return Err(invalid("unsupported checkpoint manifest schema_version"));
@@ -267,6 +279,7 @@ enum Engine {
     Native(Box<NativeTts>),
     Diffusion(Box<diffusion::Session>),
     Python(Box<python_worker::Session>),
+    Drama3(Box<drama3::Session>),
 }
 
 fn native_backend(device: Device) -> SessionResult<Backend> {
@@ -314,6 +327,9 @@ impl Session {
             ModelSource::Irodori(manifest) => {
                 Engine::Python(Box::new(manifest.load(options, cancelled)?))
             }
+            ModelSource::Drama3(manifest) => {
+                Engine::Drama3(Box::new(manifest.load(options, cancelled)?))
+            }
         };
         if let Engine::Python(session) = &engine {
             info.sample_rate = Some(session.sample_rate());
@@ -353,6 +369,9 @@ impl Session {
         if let Engine::Python(session) = &mut self.engine {
             return session.synthesize(text, language, cancelled, emit);
         }
+        if let Engine::Drama3(session) = &mut self.engine {
+            return session.synthesize(text, language, cancelled, emit);
+        }
         let mut samples = 0;
         let mut error = None;
         let failed = Cell::new(false);
@@ -382,7 +401,7 @@ impl Session {
                 .map(|_| ()),
             Engine::Native(native) => native.synthesize(text, &stop).map(|audio| forward(&audio)),
             Engine::Diffusion(session) => session.synthesize(text, &stop, forward),
-            Engine::Python(_) => unreachable!("Python synthesis returns above"),
+            Engine::Python(_) | Engine::Drama3(_) => unreachable!("PCM synthesis returns above"),
         };
         if let Some(error) = error {
             return Err(error);

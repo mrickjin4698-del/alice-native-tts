@@ -2,7 +2,7 @@
 name = "alice-native-tts"
 version = "0.1.0"
 edition = "2021"
-description = "Standalone local GPT-SoVITS synthesis and streaming"
+description = "Standalone local speech synthesis and streaming"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/mrickjin4698-del/alice-native-tts"
@@ -32,12 +32,10 @@ serde_json = "1"
 hound = "3.5"
 thiserror = "2"
 regex = "1"
+tempfile = "3"
 
 [build-dependencies]
 cc = "1.4"
-
-[dev-dependencies]
-tempfile = "3"
 
 [[example]]
 name = "r0_profile"

@@ -114,10 +114,10 @@ def exercise(args, mode, model, device, expected_rate, streaming, check_cancel, 
     if mode == "native":
         pack = json.loads((model / "pack.json").read_text(encoding="utf-8"))
         expected_family = pack["family"] if pack.get("abi") == 2 else "v2Pro"
-    if mode != "native":
+    if mode in WEIGHTS:
         options += ["--gpt-sovits-root", str(args.gpt_sovits_root)]
-        if args.python:
-            options += ["--python", str(args.python)]
+    if mode != "native" and args.python:
+        options += ["--python", str(args.python)]
     cmd = [str(args.executable), "worker", str(model), *options]
     if check_cancel:
         cmd += ["--warmup-text", TEXT]
@@ -146,7 +146,7 @@ def exercise(args, mode, model, device, expected_rate, streaming, check_cancel, 
     with wave.open(str(args.output / (mode + ".wav")), "wb") as wav:
         wav.setparams((1, 2, expected_rate, 0, "NONE", "not compressed"))
         wav.writeframes(pcm)
-    if mode in ("v4", "v5turbo") or (mode == "native" and streaming == "text_fragments"):
+    if mode in ("v4", "v5turbo", "drama3") or (mode == "native" and streaming == "text_fragments"):
         wav_out = args.output / f"{mode}-cli.wav"
         rendered = subprocess.run(
             [str(args.executable), "synthesize", str(model), "--text", TEXT, "--output", str(wav_out), *options],
@@ -164,7 +164,8 @@ def exercise(args, mode, model, device, expected_rate, streaming, check_cancel, 
 def main():
     parse = argparse.ArgumentParser(description=__doc__)
     parse.add_argument("--executable", required=True, type=Path)
-    parse.add_argument("--native-pack", required=True, type=Path)
+    parse.add_argument("--native-pack", type=Path)
+    parse.add_argument("--drama3-manifest", type=Path)
     parse.add_argument("--gpt-sovits-root", type=Path)
     parse.add_argument("--python", type=Path)
     parse.add_argument("--output", required=True, type=Path)
@@ -174,21 +175,27 @@ def main():
     parse.add_argument("--skip-native", action="store_true")
     parse.add_argument("--timeout", default=180, type=int)
     args = parse.parse_args()
-    for key in ("executable", "native_pack", "gpt_sovits_root", "python", "output"):
+    for key in ("executable", "native_pack", "drama3_manifest", "gpt_sovits_root", "python", "output"):
         value = getattr(args, key)
         if value is not None:
             setattr(args, key, value.resolve())
-    pack = json.loads((args.native_pack / "pack.json").read_text(encoding="utf-8"))
-    diffusion = pack.get("abi") == 2
-    families = args.families if args.families is not None else ([] if diffusion else list(WEIGHTS))
-    if families and (diffusion or args.gpt_sovits_root is None):
+    if args.native_pack is None and args.drama3_manifest is None:
+        parse.error("--native-pack or --drama3-manifest is required")
+    pack = json.loads((args.native_pack / "pack.json").read_text(encoding="utf-8")) if args.native_pack else None
+    diffusion = pack is not None and pack.get("abi") == 2
+    families = args.families if args.families is not None else (list(WEIGHTS) if pack and not diffusion else [])
+    if families and (pack is None or diffusion or args.gpt_sovits_root is None):
         parse.error("checkpoint tests require an ABI-1 reference pack and --gpt-sovits-root")
+    if args.drama3_manifest and args.checkpoint_device == "tensor_rt":
+        parse.error("--drama3-manifest requires --checkpoint-device cpu or cuda")
     args.output.mkdir(parents=True, exist_ok=False)
     env = {key: value for key, value in os.environ.items() if not key.startswith("EVENT_STREAM_")}
     tests = []
-    if not args.skip_native:
+    if pack is not None and not args.skip_native:
         tests.append(("native", args.native_pack, args.native_device, pack["sample_rate"],
                       "text_fragments" if diffusion else "semantic_tokens", True))
+    if args.drama3_manifest:
+        tests.append(("drama3", args.drama3_manifest, args.checkpoint_device, 44100, "semantic_tokens", True))
     for family in families:
         pre = args.gpt_sovits_root / "GPT_SoVITS" / "pretrained_models"
         gpt, sovits = WEIGHTS[family]

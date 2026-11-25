@@ -4,7 +4,7 @@
 
 ## 项目介绍
 
-Alice Native TTS 是支持 GPT-SoVITS 和 Irodori-TTS 的本地推理库和独立命令行工具。可以用
+Alice Native TTS 是支持 GPT-SoVITS、Irodori-TTS 和 Drama 3 的本地推理库和独立命令行工具。可以用
 `alice-tts` 生成 WAV，也可以启动常驻 JSONL worker，边合成边接收 PCM。
 Rust 应用可通过会话接口直接接收音频。请求支持取消，取消后可以继续使用会话。
 
@@ -14,6 +14,7 @@ Rust 应用可通过会话接口直接接收音频。请求支持取消，取消
 | ABI-2 原生 ONNX 包 | v3、v4、V5 Turbo、V5 Dev | v3 为 24 kHz，其余为 48 kHz，按文本片段交付，V5 可开启提前出声 |
 | Checkpoint 清单 | v1、v2、v2Pro、v2ProPlus、v3、v4、V5 Turbo、V5 Dev | 调用本机 GPT-SoVITS Python 运行时，采样率和流式方式随模型家族而定 |
 | Irodori checkpoint 清单 | Irodori-TTS v4.1 Small | 日语合成，使用常驻本地 Python worker 按整句交付 PCM |
+| Drama 3 GGUF 清单 | Drama 3 Q2 | 常驻 audio.cpp 会话按语义 token 分块输出 44.1 kHz PCM |
 
 原生包由 Rust 和所选推理库执行。原生文本前端支持中文和英文，处理常见的
 数字、日期、时间和金额格式。模型文件、参考音频及转写由使用者提供。
@@ -24,6 +25,20 @@ Rust 应用可通过会话接口直接接收音频。请求支持取消，取消
 单请求热态测量。**首包**从提交请求计到收到首个 PCM 块。**整句**计到
 `done`。**RTF** 为整句耗时除以实际返回的音频时长。计时排除模型加载、
 引擎构建和设备播放。
+
+### Drama 3 Q2 · 2026-11-25
+
+使用相同的本地 Q2_K GGUF 和 audio.cpp CUDA 运行包，每组通过 JSONL worker
+计时 6 次。基准为 24 个 CPU 专家层、8 线程，调优组改用 16 层、6 线程和
+`cuda_perf`。
+
+| 中文标准句 | 首包 P50 | 估算可听起点 P50 | 整句 P50 | RTF |
+| --- | ---: | ---: | ---: | ---: |
+| 基准 | 179.2 ms | 449.9 ms | 3.69 s | 0.691 |
+| CUDA 调优 | **150.3 ms** | **200.3 ms** | **2.82 s** | **0.490** |
+
+调优配置多用约 2 GiB 显存。四组输入的整句加速为 1.16–1.45×，开头停顿
+会影响实际出声时间。[完整输入、显存数据与复现方法](docs/performance-drama3-q2.md)
 
 ### Irodori-TTS v4.1 Small · 2026-11-25
 
@@ -161,6 +176,7 @@ cargo build --locked --release --bin alice-tts
 - **导出 ABI-2**。提供本地 v3–V5 checkpoint、参考 WAV 和同权重 GPT 图。CPU 用 FP32，CUDA/TensorRT 可用 FP16。[原生扩散指南](docs/native-diffusion.md)
 - **直接使用 checkpoint**。在清单里填写模型家族、权重路径、参考 WAV 和转写，再由命令行启动对应的本机运行时。[清单与依赖配置](docs/standalone.md#gpt-sovits-checkpoint)
 - **运行 Irodori-TTS**。使用 v4.1 Small 权重和配套 DACVAE，可选参考 WAV 与风格描述。[Irodori-TTS 配置](docs/standalone.md#irodori-tts)
+- **运行 Drama 3**。使用本地 Q2 GGUF 和 audio.cpp 0.9.4，支持 WAV 输出与 JSONL 流式输出。[Drama 3 配置](docs/standalone.md#drama-3-q2)
 
 参考、文本及生成 token 共用原生 GPT 的 512 个缓存位置。合成长文时，按段
 提交文本。

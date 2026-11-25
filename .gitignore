@@ -4,6 +4,7 @@
 /output/
 *.wav
 *.onnx
+*.gguf
 *.ckpt
 *.pth
 *.safetensors

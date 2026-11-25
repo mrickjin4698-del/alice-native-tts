@@ -17,6 +17,7 @@ Windows x64 运行包解压后可直接运行。系统需要 DirectML 和 Micros
 | GPT-SoVITS v3、v4 checkpoint | 本机 GPT-SoVITS Python 子进程 | 按文本片段输出 |
 | GPT-SoVITS V5 Turbo、V5 Dev checkpoint | 支持 V5 的本机 GPT-SoVITS Python 子进程 | 按文本片段输出 48 kHz PCM |
 | Irodori-TTS v4.1 Small checkpoint | 本机 Irodori-TTS Python 子进程，支持 CPU 和 CUDA | 整句日语 PCM |
+| Drama 3 Q2 GGUF | 本机 audio.cpp 0.9.4，支持 CPU 和 CUDA | 按语义 token 分块输出 44.1 kHz PCM |
 
 ## 原生 ONNX 模型
 
@@ -172,6 +173,48 @@ $env:PYTHONPATH = $previousPythonPath
 解码 profile 的输入会由 PyTorch 解码。分项日志的 `codec_backend` 字段
 记录实际使用的后端。
 
+## Drama 3 Q2
+
+准备 audio.cpp 的可执行文件及其随附的库，并在 PATH 中提供 Python 3。
+`runtime_root` 指向含 `audiocpp_server.exe` 的目录，`checkpoint` 指向兼容的本地
+Drama 3 GGUF。启动器在随机本机回环端口加载模型，并将它的流式 PCM 转为 JSONL。
+[audio.cpp v0.9.4 运行包](https://github.com/0xShug0/audio.cpp/releases/tag/v0.9.4) ·
+[Drama 3 模型与运行选项](https://github.com/0xShug0/audio.cpp/blob/v0.9.4/docs/models/fish_drama3.md)
+
+```json
+{
+  "schema_version": 1,
+  "family": "drama3",
+  "runtime_root": "./audio.cpp",
+  "checkpoint": "./models/drama-3-backbone-8bit-experts-Q2_K.gguf"
+}
+```
+
+```powershell
+alice-tts inspect ./drama3.json
+alice-tts synthesize ./drama3.json --device cuda --text '你好，欢迎收听。' --output ./drama3.wav
+alice-tts worker ./drama3.json --device cuda
+```
+
+显式语言参数使用 `auto`。使用参考音色时，填写 `reference_audio` 和对应的
+`reference_text` 转写。参考文件和模型路径均可相对清单填写。
+`--python` 可指定 Python 解释器路径。
+
+清单默认使用 8 个 CPU 线程、24 个 CPU 专家层和 2048 的上下文容量。
+`session_options` 与 `request_options` 的值使用字符串。设定 `threads: 6`，
+并添加下列 `session_options` 可以启用本次 RTX 5070 Ti 的 CUDA 调优配置。
+
+```json
+{
+  "fish_drama3.cpu_expert_layers": "16",
+  "fish_drama3.perf_mode": "cuda_perf"
+}
+```
+
+这个配置增加 GPU 驻留专家数量，启用 audio.cpp 的融合 MoE 和设备采样，
+可能改变同一种子的输出波形。应用与桌面共享显存。使用默认专家层数可以为其他
+应用腾出显存，再按机器的显存余量调整。
+
 ## JSONL 协议
 
 在 stdin 发送 UTF-8 JSON，每行一个对象。stdout 只输出 JSONL，运行日志走 stderr。模型加载成功且可选预热完成后，程序发送 `ready`。`ready` 包含 `protocol_version`、`device`、`pcm_format`、`channels` 和 `model`。
@@ -185,7 +228,7 @@ $env:PYTHONPATH = $previousPythonPath
 - `synthesize` 接受一个非空 `request_id` 和 `text`。本地 Python 后端接受可选 `language`，原生模型按文本自动识别语言。
 - `audio` 包含 `request_id`、`sample_rate` 和 `pcm`。`pcm` 是 Base64 编码的单声道小端 PCM16 样本。
 - 每个已接受的请求以一个 `done`、`cancelled` 或 `error` 结束。`done.samples` 为总样本数。繁忙时新请求收到 `rejected`。
-- `cancel` 针对当前 `request_id`。本地 Python 后端结束子进程，并在下一次合成时重新加载模型。原生模式在推理边界响应取消。
+- `cancel` 针对当前 `request_id`。GPT-SoVITS checkpoint 和 Irodori 结束 Python 子进程，并在下一次合成时重新加载模型。Drama 3 关闭当前音频流并保留 audio.cpp 会话。原生 ONNX 模式在推理边界响应取消。
 - stdin 到达 EOF 时，程序会处理完已接收的请求。`shutdown` 取消仍在进行的请求。
 
 Rust 调用方使用 `alice_native_tts::session::{Model, Session, SessionOptions}`。读取 `Session::info()` 获取采样率，再由 `Session::synthesize()` 接收 `&[i16]`。回调里的样本属于当前调用。
@@ -196,4 +239,10 @@ Rust 调用方使用 `alice_native_tts::session::{Model, Session, SessionOptions
 
 ```powershell
 python tools/check-standalone.py --executable ./target/release/alice-tts.exe --native-pack ./model-pack --gpt-sovits-root 'D:/GPT-SoVITS' --output ./output/acceptance
+```
+
+使用 Drama 3 清单独立检查流式 PCM、取消、下一次请求和 WAV。
+
+```powershell
+python tools/check-standalone.py --executable ./target/release/alice-tts.exe --drama3-manifest ./drama3.json --checkpoint-device cuda --output ./output/drama3-acceptance
 ```
