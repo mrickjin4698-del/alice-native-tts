@@ -103,13 +103,57 @@ Project Alice 的桌面适配器留在主项目中，负责提供方选择、共
 
 ## 性能说明
 
-目前只有一台机器上的初步测量，并非跨设备基准，也不构成性能保证。尚未进行
-系统性的模型量化、权重去重或多硬件调优；现有代码已经包含批量发音推理、分句
-优先交付、可选 token 流式和 DirectML 等针对性处理。
+本机使用 Windows 11、Core Ultra 9 285K、桌面 RTX 5070 Ti 16 GB 和
+TensorRT 11.2。通过常驻 `alice-tts` JSONL worker 用同一中文文本和参考音频
+测试。首段和整句分别从发送请求计时到收到首个 `audio` 和 `done`。热态计时
+排除模型加载、引擎构建和播放耗时。RTF 为整句耗时除以实际返回的音频时长。
 
-硬件信息、计时口径、结果和复现命令见[性能记录](docs/performance.md)。
-ABI-2 的结果见[同权重 checkpoint 对比](docs/performance-native-diffusion.md)
-和[调度测试](docs/performance-native-diffusion-scheduling.md)。
+### v3–V5 原生 TensorRT
+
+标准句每组预热 2 次，计时 6 次，取 P50。每格依次为 **checkpoint TensorRT →
+原生 TensorRT**，两条路径使用相同 GPT 和 SoVITS 权重。原生路径由 Rust
+调度，v3 的目标特征使用 CUDA EP。V5 Turbo 扩散 4 步，V5 Dev 保持 32 步
+和 guidance 1.30。
+
+| 模型 | 首段 PCM（ms）↓ | 整句（ms）↓ | RTF ↓ |
+| --- | ---: | ---: | ---: |
+| v3 | 492 → **350** | 1,797 → **980** | 0.229 → **0.125** |
+| v4 | 518 → **298** | 1,812 → **872** | 0.249 → **0.111** |
+| V5 Turbo | 233 → **190** | 1,079 → **511** | 0.154 → **0.063** |
+| V5 Dev | 748 → **432** | 2,781 → **1,235** | 0.397 → **0.152** |
+
+V5 Turbo 短句首段 P50 为 **145 ms**。短句、标准句和滚动长句共 24 项首段与
+整句 P50，相对 checkpoint TensorRT 加速 **1.22–3.02 倍**。详见
+[优化结果与复现命令](docs/performance-native-diffusion-tensorrt.md)、
+[checkpoint 测试口径](docs/performance-native-diffusion.md)和
+[调度测试](docs/performance-native-diffusion-scheduling.md)。
+
+V5 可选用语义首窗。标准句首包 P50，Turbo 从 185 ms 降至 **58 ms**，
+Dev 从 419 ms 降至 **262 ms**。同机同输入下，gsv.cpp v0.1.3 分别为
+244 ms 和 862 ms。此模式会改变首个片段的波形。见[V5 首包基准](docs/performance-v5-first-pcm.md)。
+
+### ABI-1 token 流式
+
+使用 TensorRT GPT 和 CUDA VITS，已有 v2Pro 模型包的标准句首段 P50 为
+**94 ms**，整句为 **804 ms**。从 v2Pro 和 v2ProPlus checkpoint 导出的
+原生包，首段 P50 分别为 **99 ms** 和 **103 ms**。三组首包均含 880 ms 的
+音频，每组预热 3 次、计时 12 次。另见[早期 CPU 和 DirectML 结果](docs/performance.md)。
+
+### 同类 GPT-SoVITS 项目
+
+公开成绩保留各项目的输入场景和计时口径。
+
+| 项目与模型 | 硬件与场景 | 首段 PCM 或首包（ms）↓ | 整句（ms）↓ | RTF ↓ | 来源 |
+| --- | --- | ---: | ---: | ---: | --- |
+| Alice Native TTS · V5 Turbo | RTX 5070 Ti，原生 TensorRT 语义首窗，JSONL 标准句 | 57.85 | 516.90 | 0.0649 | [本机基准](docs/performance-v5-first-pcm.md) |
+| AnifLive-TTS v1.5 · V5 Turbo | RTX 5070 Ti，TensorRT 11 / Triton FP16，HTTP 长连接 PCM | 66.89 | 75.98 | 0.0473 | [AnifLive HTTP 基准](https://github.com/Hiruynk/AnifLive-TTS/blob/main/docs/BENCHMARKS.md#v15-http-measurements) |
+| gsv.cpp v0.1.3 · V5 Turbo | RTX 5070 Ti，Vulkan，HTTP 长连接 PCM | 174.45 | 197.06 | 0.1120 | [AnifLive 的 gsv.cpp 实测](https://github.com/Hiruynk/AnifLive-TTS/blob/main/docs/BENCHMARKS.md#v15-http-measurements) |
+| GPT-SoVITS-cpp | RTX 2080 Ti，TensorRT FP16 流式，约 19 秒混语音频 | 460 | — | 0.1205 | [SDK 基准](https://github.com/GPT-SoVITS-Devel/GPT-SoVITS-cpp#-performance-benchmarks) |
+| GPT-SoVITS 上游 · v2ProPlus | RTX 4090，约 4 分钟音频 | — | — | 0.014 | [上游 README](https://github.com/RVC-Boss/GPT-SoVITS#features) |
+
+三组 V5 Turbo 使用相同型号的 GPU，文本、声线和交付协议各异。Alice 的标准句
+首包有 0.30 秒 PCM，整句有 7.96 秒音频。HTTP 基准每种模式测了 1,000 次
+AnifLive 和 300 次 gsv.cpp 请求并取中位数，分别记录首包和可听起点。
 
 ## 当前限制
 

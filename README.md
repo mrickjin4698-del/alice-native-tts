@@ -195,16 +195,65 @@ event reporting, playback queues, and integration-level cancellation.
 
 ## Performance
 
-This is an initial measurement snapshot from one machine, not a cross-device
-benchmark or a performance guarantee. The implementation has not had a
-systematic model-quantization, weight-deduplication, or broad hardware-tuning
-pass. It does include targeted work such as batched pronunciation inference,
-early clause delivery, optional token streaming, and DirectML support.
+Local tests use Windows 11, a Core Ultra 9 285K, a desktop RTX 5070 Ti 16 GB and
+TensorRT 11.2. A persistent `alice-tts` JSONL worker runs the same Mandarin
+text and reference recording. First PCM and completion measure from request
+submission to `audio` and `done`, respectively. Warm timings exclude model
+loading, engine builds and playback. RTF is completion time divided by the
+duration of the returned audio.
 
-See [the benchmark notes](docs/performance.md) for hardware, timing definitions,
-results, and reproduction commands.
-For ABI-2, see the [checkpoint comparison](docs/performance-native-diffusion.md)
-and the [scheduling measurements](docs/performance-native-diffusion-scheduling.md).
+### v3–V5 native TensorRT
+
+Standard sentence P50 after 2 warmups and 6 measured requests per case. Each
+cell shows **checkpoint TensorRT → native TensorRT** with matching GPT and
+SoVITS weights. The native path runs in Rust and uses CUDA EP for v3 target
+features. V5 Turbo uses 4 diffusion steps. V5 Dev keeps 32 steps and guidance 1.30.
+
+| Model | First PCM (ms) ↓ | Completion (ms) ↓ | RTF ↓ |
+| --- | ---: | ---: | ---: |
+| v3 | 492 → **350** | 1,797 → **980** | 0.229 → **0.125** |
+| v4 | 518 → **298** | 1,812 → **872** | 0.249 → **0.111** |
+| V5 Turbo | 233 → **190** | 1,079 → **511** | 0.154 → **0.063** |
+| V5 Dev | 748 → **432** | 2,781 → **1,235** | 0.397 → **0.152** |
+
+V5 Turbo returned first PCM in **145 ms** P50 on the short sentence. Across
+short, standard and rolling-window inputs, all 24 first-PCM and completion
+P50 measurements improved by **1.22–3.02×** over checkpoint TensorRT. See the
+[optimized results and reproduction commands](docs/performance-native-diffusion-tensorrt.md),
+[checkpoint methodology](docs/performance-native-diffusion.md) and
+[scheduling tests](docs/performance-native-diffusion-scheduling.md).
+
+V5 also has an opt-in semantic-prefix mode. On the standard sentence, first
+PCM P50 fell from 185 to **58 ms** for Turbo and from 419 to **262 ms** for
+Dev. The same-machine gsv.cpp v0.1.3 comparison measured 244 ms and 862 ms,
+respectively. The mode changes the first fragment's waveform. See
+[V5 first PCM benchmarks](docs/performance-v5-first-pcm.md).
+
+### ABI-1 token streaming
+
+With TensorRT GPT and CUDA VITS, the existing v2Pro pack reached **94 ms** first
+PCM and **804 ms** completion P50 on the standard sentence. The v2Pro and
+v2ProPlus checkpoint exports reached **99 ms** and **103 ms** first PCM.
+All three delivered 880 ms of audio in the first chunk, with 3 warmups and 12
+measured requests per case. See the [earlier CPU and DirectML results](docs/performance.md).
+
+### Other GPT-SoVITS runtimes
+
+These published measurements retain each project's workload and timing boundary.
+
+| Runtime and model | Hardware and workload | First PCM or packet (ms) ↓ | Completion (ms) ↓ | RTF ↓ | Source |
+| --- | --- | ---: | ---: | ---: | --- |
+| Alice Native TTS · V5 Turbo | RTX 5070 Ti, native TensorRT with a semantic prefix, standard sentence over JSONL | 57.85 | 516.90 | 0.0649 | [Local benchmark](docs/performance-v5-first-pcm.md) |
+| AnifLive-TTS v1.5 · V5 Turbo | RTX 5070 Ti, TensorRT 11 / Triton FP16, HTTP keep-alive PCM | 66.89 | 75.98 | 0.0473 | [AnifLive HTTP benchmark](https://github.com/Hiruynk/AnifLive-TTS/blob/main/docs/BENCHMARKS.md#v15-http-measurements) |
+| gsv.cpp v0.1.3 · V5 Turbo | RTX 5070 Ti, Vulkan, HTTP keep-alive PCM | 174.45 | 197.06 | 0.1120 | [AnifLive's gsv.cpp test](https://github.com/Hiruynk/AnifLive-TTS/blob/main/docs/BENCHMARKS.md#v15-http-measurements) |
+| GPT-SoVITS-cpp | RTX 2080 Ti, TensorRT FP16 streaming, ~19 s of mixed-language audio | 460 | — | 0.1205 | [SDK benchmark](https://github.com/GPT-SoVITS-Devel/GPT-SoVITS-cpp#-performance-benchmarks) |
+| GPT-SoVITS upstream · v2ProPlus | RTX 4090, ~4 minutes of audio | — | — | 0.014 | [Upstream README](https://github.com/RVC-Boss/GPT-SoVITS#features) |
+
+The three V5 Turbo rows share a GPU model. Text, voices and delivery protocols
+differ. Alice's standard sentence returns 0.30 s of audio in the first PCM
+chunk and 7.96 s in total. The HTTP study reports medians from 1,000 AnifLive
+requests and 300 gsv.cpp requests per mode. It measures audible onset separately
+from PCM packet arrival.
 
 ## Current limits
 

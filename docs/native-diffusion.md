@@ -61,6 +61,11 @@ JSONL 握手中的 `streaming` 为 `text_fragments`，`default_language` 为
 窗口内的去噪状态在 CUDA 上复用，窗口间按家族更新提示条件。
 取消发生在图执行边界，调用方可以继续使用同一会话。
 
+V5 可设置 `ALICE_NATIVE_TTS_V5_FIRST_PCM_TOKENS`，在首个文本片段的语义前缀
+就绪后交付首包。实测配置是 Turbo `16`，Dev `28`。有限语义上下文会改变首个
+片段的 PCM。CLI 沿用 JSONL `audio` 事件，Rust 会话沿用音频回调。
+首包数据与复现方法见[V5 首包测试](performance-v5-first-pcm.md)。
+
 复现真实 PCM 的方法见[调度测试](performance-native-diffusion-scheduling.md)。
 首段延迟、整段时间、RTF 及 PCM 对比见[同权重 checkpoint 对比](performance-native-diffusion.md)。
 可选的 TensorRT 11 声学 plan、混合精度 GPT 和后续实验见[原生 TensorRT 性能实验](performance-native-diffusion-tensorrt.md)。

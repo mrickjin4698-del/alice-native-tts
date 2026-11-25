@@ -13,6 +13,7 @@ from statistics import median, quantiles
 import subprocess
 import sys
 import time
+import wave
 
 
 WORKLOADS = {
@@ -39,6 +40,7 @@ def measure(worker, key, text, sample_rate):
     started = time.perf_counter_ns()
     worker.send({"op": "synthesize", "request_id": key, "text": text})
     chunks = []
+    arrivals = []
     first = None
     while True:
         packet = worker.receive()
@@ -51,6 +53,7 @@ def measure(worker, key, text, sample_rate):
             if first is None:
                 first = arrived
             chunks.append(packet["pcm"])
+            arrivals.append((arrived - started) / 1e6)
         elif packet["type"] == "done":
             if first is None:
                 raise ValueError("worker produced no audio")
@@ -65,10 +68,38 @@ def measure(worker, key, text, sample_rate):
                 "first_ms": (first - started) / 1e6, "total_ms": complete, "rtf": complete / 1000 / duration,
                 "audio_seconds": duration, "first_chunk_seconds": len(audio[0]) / 2 / sample_rate,
                 "chunks": len(audio), "pcm_sha256": hashlib.sha256(pcm).hexdigest(),
+                "chunk_samples": [len(chunk) // 2 for chunk in audio],
+                "chunk_pcm_sha256": [hashlib.sha256(chunk).hexdigest() for chunk in audio],
+                **playback_metrics(audio, arrivals, sample_rate, pcm),
             }
             return timing, pcm
         else:
             raise ValueError(packet.get("message", str(packet)))
+
+
+def playback_metrics(chunks, arrivals, sample_rate, pcm):
+    """Estimate onset and starvation for immediate playback without a prebuffer."""
+    samples = array("h", pcm)
+    if sys.byteorder == "big":
+        samples.byteswap()
+    frame = sample_rate // 100
+    threshold = frame * 32768**2 * 10**(-4.5)
+    onset = next((index for index in range(0, len(samples) - frame + 1, frame)
+                  if sum(value**2 for value in samples[index:index + frame]) >= threshold), None)
+    audible = None
+    gap = 0.0
+    buffer_end = arrivals[0]
+    offset = 0
+    for chunk, arrival in zip(chunks, arrivals):
+        count = len(chunk) // 2
+        gap = max(gap, arrival - buffer_end)
+        playback = max(arrival, buffer_end)
+        if onset is not None and offset <= onset < offset + count:
+            audible = playback + (onset - offset) * 1000 / sample_rate
+        buffer_end = playback + count * 1000 / sample_rate
+        offset += count
+    return {"audible_ms": audible, "onset_audio_ms": None if onset is None else onset * 1000 / sample_rate,
+            "max_playback_gap_ms": gap}
 
 
 def pcm_relative_l2(reference, current):
@@ -89,8 +120,10 @@ def pcm_relative_l2(reference, current):
 def summary(samples, names):
     result = {}
     for name in names:
-        series = [row[name] for row in samples]
-        result[name] = {"p50": median(series), "p95": quantiles(series, n=100, method="inclusive")[94]}
+        series = [row[name] for row in samples if row[name] is not None]
+        if series:
+            p95 = series[0] if len(series) == 1 else quantiles(series, n=100, method="inclusive")[94]
+            result[name] = {"p50": median(series), "p95": p95}
     return result
 
 
@@ -126,9 +159,14 @@ def bench(worker_class, args, model, family, is_native, runtime, sample_rate):
                     measured, pcm = measure(worker, f"{name}-{index}", text, sample_rate)
                     if reference_pcm is None:
                         reference_pcm = pcm
+                        if args.save_wav:
+                            with wave.open(str(args.output / f"{label}-{name}.wav"), "wb") as wav:
+                                wav.setparams((1, 2, sample_rate, 0, "NONE", "not compressed"))
+                                wav.writeframes(pcm)
                     measured["pcm_relative_l2_vs_first"] = pcm_relative_l2(reference_pcm, pcm)
                     samples.append(measured)
-                timing = summary(samples, ("first_ms", "total_ms", "rtf", "audio_seconds", "first_chunk_seconds"))
+                timing = summary(samples, ("first_ms", "total_ms", "rtf", "audio_seconds", "first_chunk_seconds",
+                                           "audible_ms", "onset_audio_ms", "max_playback_gap_ms"))
                 result["workloads"][name] = {"samples": samples, "summary": timing}
                 print(f"  {name}: first={timing['first_ms']['p50']:.1f} ms, "
                       f"total={timing['total_ms']['p50']:.1f} ms, RTF={timing['rtf']['p50']:.3f}", flush=True)
@@ -167,6 +205,7 @@ def main():
     cli.add_argument("--warmups", type=int, default=3)
     cli.add_argument("--timeout", type=int, default=300)
     cli.add_argument("--workload", nargs="+", choices=WORKLOADS, default=list(WORKLOADS))
+    cli.add_argument("--save-wav", action="store_true", help="Save the first measured PCM for each new case")
     args = cli.parse_args()
     if args.samples < 2 or args.warmups < 1 or len(set(args.workload)) != len(args.workload):
         cli.error("requires two or more samples, one or more warmups and unique workloads")
@@ -199,6 +238,7 @@ def main():
         report["native_cuda_target_tuning"] = os.environ.get("ALICE_NATIVE_TTS_DIFFUSION_CUDA_TARGET", "")
         report["native_v3_target_buckets"] = bool(os.environ.get("ALICE_NATIVE_TTS_DIFFUSION_V3_BUCKETS"))
         report["native_rolling_pcm"] = os.environ.get("ALICE_NATIVE_TTS_DIFFUSION_ROLLING_PCM") == "1"
+        report["native_v5_first_pcm_tokens"] = os.environ.get("ALICE_NATIVE_TTS_V5_FIRST_PCM_TOKENS")
     path = args.output / "benchmark.json"
     for pack_dir, checkpoint_path, runtime in args.model:
         pack_dir, checkpoint_path, runtime = [Path(value).resolve() for value in (pack_dir, checkpoint_path, runtime)]

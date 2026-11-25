@@ -23,6 +23,10 @@ const BERT_CHANNELS: usize = 1024;
 const KV_CAPACITY: usize = 512;
 const EOS: i64 = 1024;
 const VOCODER_LOOKAHEAD_FRAMES: usize = 128;
+const V5_FIRST_LOOKAHEAD_FRAMES: usize = 12;
+const V5_FIRST_OVERLAP_FRAMES: usize = 4;
+const V5_SECOND_PREFIX_TOKENS: usize = 72;
+const NOISE_MULTIPLIER: u64 = 6364136223846793005;
 
 const FILES: &[&str] = &[
     "config.json",
@@ -295,6 +299,7 @@ impl Gpt {
         bert: Vec<f32>,
         prompt: &[i64],
         cancel: &impl Fn() -> bool,
+        on_prefix: impl FnMut(&[i64]) -> Result<()>,
     ) -> Result<Vec<i64>> {
         let length = phones.len();
         let budget = KV_CAPACITY
@@ -320,7 +325,7 @@ impl Gpt {
                 let initial = topk(&mut output)?;
                 let mut key = take(&mut output, "k_cache")?;
                 let mut value = take(&mut output, "v_cache")?;
-                generate(initial, budget, cancel, |token, index| {
+                generate(initial, budget, cancel, on_prefix, |token, index| {
                     let mut output = step.run(ort::inputs! {
                         "samples" => ti(vec![1, 1], vec![token])?,
                         "k_cache" => &key, "v_cache" => &value,
@@ -337,9 +342,13 @@ impl Gpt {
                 gpt.reset();
                 let (values, indices, x, y) = gpt.run_encoder(&phones, prompt, &bert)?;
                 validate_lengths(&[x], &[y], length, prompt.len())?;
-                generate((values, indices), budget, cancel, |token, index| {
-                    gpt.run_step(token, index)
-                })
+                generate(
+                    (values, indices),
+                    budget,
+                    cancel,
+                    on_prefix,
+                    |token, index| gpt.run_step(token, index),
+                )
             }
         }
     }
@@ -365,6 +374,7 @@ fn generate(
     mut logits: (Vec<f32>, Vec<i64>),
     budget: usize,
     cancel: &impl Fn() -> bool,
+    mut on_prefix: impl FnMut(&[i64]) -> Result<()>,
     mut step: impl FnMut(i64, usize) -> Result<(Vec<f32>, Vec<i64>)>,
 ) -> Result<Vec<i64>> {
     let mut seed = 1234;
@@ -385,6 +395,7 @@ fn generate(
             return Err(invalid("invalid GPT semantic token"));
         }
         tokens.push(token);
+        on_prefix(&tokens)?;
         logits = step(token, index)?;
     }
     if tokens.is_empty() {
@@ -421,15 +432,28 @@ struct DenoiseWindow<'a> {
 pub(super) struct Session {
     frontend: Frontend,
     gpt: Gpt,
-    acoustics: Acoustics,
+    acoustic: AcousticSession,
     pack: Pack,
+    reference_bert: Vec<f32>,
+    profile: bool,
+    first_pcm_tokens: Option<usize>,
+}
+
+struct AcousticSession {
+    graphs: Acoustics,
     schedule: Schedule,
     reference_features: Frames,
     reference_mel: Frames,
-    reference_bert: Vec<f32>,
     rope: Vec<f32>,
-    profile: bool,
+    rope_channels: usize,
     rolling_pcm: bool,
+}
+
+struct AcousticPrefix {
+    features: Frames,
+    mel: Frames,
+    emitted: usize,
+    overlap: Vec<f32>,
 }
 
 #[derive(Default, Serialize)]
@@ -437,6 +461,8 @@ struct Timings {
     fragments: usize,
     chunks: usize,
     denoise_steps: usize,
+    prefix_windows: usize,
+    leading_samples_trimmed: usize,
     frontend_ms: f64,
     gpt_ms: f64,
     features_ms: f64,
@@ -447,6 +473,18 @@ struct Timings {
 
 fn milliseconds(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
+}
+
+fn read_env_count(name: &str, min: usize, max: usize) -> Result<Option<usize>> {
+    std::env::var_os(name)
+        .map(|value| {
+            value
+                .to_str()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|count| (min..=max).contains(count))
+                .ok_or_else(|| invalid(format!("{name} must be between {min} and {max}")))
+        })
+        .transpose()
 }
 
 impl Session {
@@ -485,18 +523,27 @@ impl Session {
         let profile = std::env::var("ALICE_NATIVE_TTS_DIFFUSION_PROFILE").as_deref() == Ok("1");
         let rolling_pcm =
             std::env::var("ALICE_NATIVE_TTS_DIFFUSION_ROLLING_PCM").as_deref() == Ok("1");
+        let first_pcm_tokens = if schedule.v5 {
+            read_env_count("ALICE_NATIVE_TTS_V5_FIRST_PCM_TOKENS", 8, 64)?
+        } else {
+            None
+        };
         Ok(Self {
             frontend,
             gpt,
-            acoustics,
+            acoustic: AcousticSession {
+                graphs: acoustics,
+                schedule,
+                reference_features,
+                reference_mel,
+                rope,
+                rope_channels: pack.rope_channels,
+                rolling_pcm,
+            },
             pack,
-            schedule,
-            reference_features,
-            reference_mel,
             reference_bert,
-            rope,
             profile,
-            rolling_pcm,
+            first_pcm_tokens,
         })
     }
 
@@ -532,23 +579,65 @@ impl Session {
                 bert.extend_from_slice(text);
             }
             timings.frontend_ms += milliseconds(start);
+            let mut gpt_start = Instant::now();
+            let mut prefix = None;
+            let fragment_seed = seed;
+            let first_pcm_tokens = self.first_pcm_tokens.filter(|_| timings.fragments == 0);
+            let channels = self.pack.feature_channels;
+            let codes = self.gpt.synthesize(
+                all_phones,
+                bert,
+                &self.pack.reference_codes,
+                cancel,
+                |codes| {
+                    if first_pcm_tokens.is_some_and(|count| {
+                        codes.len() == count
+                            || codes.len() == V5_SECOND_PREFIX_TOKENS.max(count + 16)
+                    }) {
+                        timings.gpt_ms += milliseconds(gpt_start);
+                        self.acoustic.emit_prefix(
+                            &mut prefix,
+                            codes,
+                            &phones,
+                            channels,
+                            &mut seed,
+                            cancel,
+                            &mut timings,
+                            &mut emit,
+                        )?;
+                        check(cancel)?;
+                        gpt_start = Instant::now();
+                    }
+                    Ok(())
+                },
+            )?;
+            timings.gpt_ms += milliseconds(gpt_start);
             let start = Instant::now();
-            let codes =
-                self.gpt
-                    .synthesize(all_phones, bert, &self.pack.reference_codes, cancel)?;
-            timings.gpt_ms += milliseconds(start);
-            let start = Instant::now();
-            let features = self
-                .acoustics
-                .features(codes, phones, self.pack.feature_channels)?;
+            let features = self.acoustic.graphs.features(codes, phones, channels)?;
             timings.features_ms += milliseconds(start);
-            let (mel, emitted) =
-                self.diffuse(&features, &mut seed, cancel, &mut timings, &mut emit)?;
+            let has_prefix = prefix.is_some();
+            let (mel, emitted, overlap) = self.acoustic.diffuse(
+                &features,
+                prefix,
+                &mut seed,
+                cancel,
+                &mut timings,
+                &mut emit,
+            )?;
+            if has_prefix {
+                // Later text fragments keep the noise sequence from full-fragment synthesis.
+                let window = self
+                    .acoustic
+                    .schedule
+                    .target_frames(self.acoustic.reference_mel.len);
+                seed = fragment_end_seed(fragment_seed, features.len, window);
+            }
             check(cancel)?;
             let start = Instant::now();
-            let samples = mel.len * self.schedule.samples_per_frame;
+            let samples = mel.len * self.acoustic.schedule.samples_per_frame;
             let silence = self.pack.sample_rate as usize * 3 / 10;
-            let normalized = self.acoustics.waveform(mel, samples, silence)?;
+            let mut normalized = self.acoustic.graphs.waveform(mel, samples, silence)?;
+            blend_overlap(&mut normalized[emitted..], &overlap);
             timings.vocoder_ms += milliseconds(start);
             timings.fragments += 1;
             check(cancel)?;
@@ -562,21 +651,107 @@ impl Session {
         }
         Ok(())
     }
+}
 
-    fn diffuse(
+impl AcousticSession {
+    fn emit_prefix(
         &mut self,
-        target: &Frames,
+        prefix: &mut Option<AcousticPrefix>,
+        codes: &[i64],
+        phones: &[i64],
+        channels: usize,
         seed: &mut u64,
         cancel: &impl Fn() -> bool,
         timings: &mut Timings,
         emit: &mut impl FnMut(&[f32]),
-    ) -> Result<(Frames, usize)> {
-        let mut history = None::<(Frames, Frames)>;
-        let reference_len = self.pack.reference_frames;
-        let mut output = None::<Frames>;
-        let mut emitted = 0;
+    ) -> Result<()> {
+        check(cancel)?;
+        let started = Instant::now();
+        let features = self
+            .graphs
+            .features(codes.to_vec(), phones.to_vec(), channels)?;
+        timings.features_ms += milliseconds(started);
+        if features.len != codes.len() * 4 {
+            return Err(invalid(
+                "V5 target features must have four frames per token",
+            ));
+        }
+        let start = prefix.as_ref().map_or(0, |prior| prior.mel.len);
+        let current = features.slice(start, features.len);
+        let history = prefix
+            .as_ref()
+            .map(|prior| (prior.features.tail(32), prior.mel.tail(32)));
+        let (conditioning, prompt) = self.prompt_for_chunk(history.as_ref(), &current);
+        let mut prefix_seed = *seed;
+        let generated = self.denoise(conditioning, &prompt, &mut prefix_seed, cancel, timings)?;
+        let mel = prefix.as_ref().map_or_else(
+            || generated.slice(0, generated.len),
+            |prior| prior.mel.append(&generated),
+        );
+        let frames = mel.len - V5_FIRST_LOOKAHEAD_FRAMES;
+        let samples_per_frame = self.schedule.samples_per_frame;
+        let next_sample = (frames - V5_FIRST_OVERLAP_FRAMES) * samples_per_frame;
+        let started = Instant::now();
+        let mut audio =
+            self.graphs
+                .waveform(mel.slice(0, mel.len), mel.len * samples_per_frame, 0)?;
+        timings.vocoder_ms += milliseconds(started);
+        let offset = match prefix.as_ref() {
+            Some(prior) => {
+                blend_overlap(&mut audio[prior.emitted..], &prior.overlap);
+                prior.emitted
+            }
+            None => {
+                let head = &audio[..next_sample];
+                // Keep 10 ms of pre-roll before the first -60 dBFS frame.
+                if voice_frame(head, samples_per_frame, 10f32.powf(-4.5)).is_none() {
+                    return Ok(());
+                }
+                let quiet = voice_frame(head, samples_per_frame, 1e-6).unwrap_or(0);
+                let offset = quiet.saturating_sub(1) * samples_per_frame;
+                timings.leading_samples_trimmed = offset;
+                offset
+            }
+        };
+        check(cancel)?;
+        *seed = prefix_seed;
+        emit(&audio[offset..next_sample]);
+        timings.prefix_windows += 1;
+        *prefix = Some(AcousticPrefix {
+            features: features.slice(0, frames),
+            mel: mel.slice(0, frames),
+            emitted: next_sample,
+            overlap: audio[next_sample..frames * samples_per_frame].to_vec(),
+        });
+        Ok(())
+    }
+
+    fn diffuse(
+        &mut self,
+        target: &Frames,
+        first: Option<AcousticPrefix>,
+        seed: &mut u64,
+        cancel: &impl Fn() -> bool,
+        timings: &mut Timings,
+        emit: &mut impl FnMut(&[f32]),
+    ) -> Result<(Frames, usize, Vec<f32>)> {
+        let reference_len = self.reference_mel.len;
+        let (start, mut history, mut output, mut emitted, overlap) = match first {
+            Some(first) if first.mel.len < target.len => (
+                first.mel.len,
+                Some((
+                    first.features.tail(reference_len),
+                    first.mel.tail(reference_len),
+                )),
+                Some(first.mel),
+                first.emitted,
+                first.overlap,
+            ),
+            Some(_) => return Err(invalid("V5 target ended inside the first acoustic window")),
+            None => (0, None, None, 0, Vec::new()),
+        };
         let chunk_frames = self.schedule.target_frames(reference_len);
-        for start in (0..target.len).step_by(chunk_frames) {
+        for start in (start..target.len).step_by(chunk_frames) {
             check(cancel)?;
             let current = target.slice(start, (start + chunk_frames).min(target.len));
             let (features, mel) = self.prompt_for_chunk(history.as_ref(), &current);
@@ -589,7 +764,7 @@ impl Session {
                 check(cancel)?;
                 let started = Instant::now();
                 let samples_per_frame = self.schedule.samples_per_frame;
-                let waveform = self.acoustics.waveform(
+                let waveform = self.graphs.waveform(
                     generated.slice(0, generated.len),
                     generated.len * samples_per_frame,
                     0,
@@ -606,7 +781,7 @@ impl Session {
             });
         }
         let mel = output.ok_or_else(|| invalid("diffusion returned no mel frames"))?;
-        Ok((mel, emitted))
+        Ok((mel, emitted, overlap))
     }
 
     fn prompt_for_chunk(
@@ -620,11 +795,8 @@ impl Session {
                 self.reference_mel.slice(0, self.reference_mel.len),
             ),
             Some((feat, mel)) if self.schedule.v5 => {
-                let tail = 32
-                    .min(feat.len)
-                    .min(mel.len)
-                    .min(self.pack.reference_frames);
-                let prefix = self.pack.reference_frames - tail;
+                let tail = 32.min(feat.len).min(mel.len).min(self.reference_mel.len);
+                let prefix = self.reference_mel.len - tail;
                 let features = self
                     .reference_features
                     .slice(0, prefix)
@@ -668,12 +840,12 @@ impl Session {
             prompt: padded,
             mask,
             state: noise(seed, frames, prompt.len, self.schedule.temperature),
-            rope: &self.rope[..frames * self.pack.rope_channels],
-            rope_channels: self.pack.rope_channels,
+            rope: &self.rope[..frames * self.rope_channels],
+            rope_channels: self.rope_channels,
         };
         timings.denoise_ms += milliseconds(started);
         let result = self
-            .acoustics
+            .graphs
             .denoise(window, self.schedule, cancel, timings)?;
         timings.chunks += 1;
         timings.denoise_steps += self.schedule.steps;
@@ -813,6 +985,20 @@ fn normalize_waveform(
     Ok(normalized)
 }
 
+fn voice_frame(audio: &[f32], samples_per_frame: usize, threshold: f32) -> Option<usize> {
+    audio.chunks_exact(samples_per_frame).position(|frame| {
+        let energy = frame.iter().map(|sample| sample * sample).sum::<f32>();
+        energy >= frame.len() as f32 * threshold
+    })
+}
+
+fn blend_overlap(audio: &mut [f32], overlap: &[f32]) {
+    for (index, (&prior, output)) in overlap.iter().zip(audio).enumerate() {
+        let fade = (index + 1) as f32 / (overlap.len() + 1) as f32;
+        *output = prior * (1.0 - fade) + *output * fade;
+    }
+}
+
 impl OrtAcoustics {
     fn denoise(
         &mut self,
@@ -865,7 +1051,7 @@ impl OrtAcoustics {
 
 fn noise(seed: &mut u64, frames: usize, prompt: usize, temperature: f32) -> Vec<f32> {
     let mut uniform = || {
-        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        *seed = seed.wrapping_mul(NOISE_MULTIPLIER).wrapping_add(1);
         ((*seed >> 11) + 1) as f64 / ((1u64 << 53) as f64 + 1.0)
     };
     let mut state = vec![0f32; MEL_CHANNELS * frames];
@@ -880,6 +1066,16 @@ fn noise(seed: &mut u64, frames: usize, prompt: usize, temperature: f32) -> Vec<
         }
     }
     state
+}
+
+fn fragment_end_seed(seed: u64, frames: usize, window: usize) -> u64 {
+    let draws: usize = (0..frames)
+        .step_by(window)
+        .map(|start| (frames - start).min(window).div_ceil(2) * 2 * MEL_CHANNELS)
+        .sum();
+    (0..draws).fold(seed, |seed, _| {
+        seed.wrapping_mul(NOISE_MULTIPLIER).wrapping_add(1)
+    })
 }
 
 fn fragments(text: &str) -> impl Iterator<Item = &str> {
@@ -912,9 +1108,9 @@ mod tests {
     #[test]
     fn full_gpt_cache_requires_an_end_token() {
         let score = |token| (vec![0.0], vec![token]);
-        let full = generate(score(1), 1, &|| false, |_, _| Ok(score(EOS)));
+        let full = generate(score(1), 1, &|| false, |_| Ok(()), |_, _| Ok(score(EOS)));
         assert_eq!(full.unwrap(), [1]);
-        let unfinished = generate(score(1), 1, &|| false, |_, _| Ok(score(2)));
+        let unfinished = generate(score(1), 1, &|| false, |_| Ok(()), |_, _| Ok(score(2)));
         assert!(unfinished
             .unwrap_err()
             .to_string()
@@ -940,5 +1136,13 @@ mod tests {
         let tail = frames.tail(2);
         assert_eq!(prefix.append(&tail).values, [2., 3., 5., 6.]);
         assert_eq!(tail.append(&prefix).values, [2., 3., 5., 6.]);
+    }
+
+    #[test]
+    fn streaming_preserves_following_fragments_noise_seed() {
+        let mut expected = 1234;
+        noise(&mut expected, 517 + 483, 483, 0.875);
+        noise(&mut expected, 123 + 483, 483, 0.875);
+        assert_eq!(fragment_end_seed(1234, 640, 517), expected);
     }
 }
