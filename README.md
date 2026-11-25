@@ -3,9 +3,9 @@
 [简体中文](README.zh-CN.md)
 
 Local GPT-SoVITS synthesis for applications and the command line. The native
-Rust engine runs v2Pro ONNX packs. The checkpoint adapter runs v1, v2, v2Pro,
-v2ProPlus, v3, v4, V5 Turbo and V5 Dev through an installed GPT-SoVITS runtime
-in a local process.
+Rust engine runs v2Pro ABI-1 packs and v3, v4, V5 Turbo and V5 Dev ABI-2 packs.
+The checkpoint adapter runs v1, v2, v2Pro, v2ProPlus, v3, v4, V5 Turbo and V5 Dev
+through an installed GPT-SoVITS runtime in a local process.
 
 This repository contains the inference code and pack preparation tools. Model
 weights and reference voices are supplied separately by each pack author and
@@ -34,8 +34,8 @@ manifests, devices, installation and the JSONL protocol.
   native TensorRT 11 GPT backend is Windows x64-only and feature-gated; it keeps
   K/V cache on the GPU and retains CPU sampling. The two TensorRT routes use
   different runtime APIs.
-- Optional token streaming when the model pack contains the matching ABI-1
-  streaming graph.
+- Optional token streaming with a matching ABI-1 streaming graph. ABI-2
+  diffusion packs emit PCM after each text fragment.
 - Cooperative cancellation between ONNX graph runs.
 
 The text frontend is intentionally scoped. It is not full GPT-SoVITS Python
@@ -43,9 +43,9 @@ frontend parity; see [current limits](#current-limits).
 
 ## Quick start
 
-Install a stable Rust toolchain and provide a compatible ABI-1 model pack in a
-local directory. See [Model packs](#model-packs) for the required files and
-preparation tools.
+Install a stable Rust toolchain and provide a compatible model pack in a
+local directory. The example commands below use ABI-1. ABI-2 uses the
+standalone CLI and Rust session interface. See [Model packs](#model-packs).
 
 Synthesize a WAV with the CPU backend:
 
@@ -156,8 +156,8 @@ model directory. The engine cache keys include the model file fingerprint.
 
 ## Model packs
 
-Inference requires an ABI-1 `v2Pro` pack at 32 kHz with a 512-token GPT KV
-capacity. A base pack contains the ONNX graphs, frontend data, a reference WAV
+An ABI-1 `v2Pro` pack runs at 32 kHz with a 512-token GPT KV capacity.
+A base pack contains the ONNX graphs, frontend data, a reference WAV
 and its transcript, plus a `LICENSES.txt` provenance file. `pack.json` declares
 the ABI and reference files. Optional token streaming also requires
 `sovits_stream.onnx` and the matching streaming metadata.
@@ -167,6 +167,12 @@ installation with `tools/prepare-native-tts-pack.py`. Python is needed only for
 this offline preparation step; runtime inference is Rust. The optional
 streaming graph is exported and parity-checked with
 `tools/export-native-tts-stream.py`.
+
+ABI-2 exports v3 at 24 kHz and v4, V5 Turbo and V5 Dev at 48 kHz. Rust drives
+the GPT, target features, diffusion steps and vocoder. An FP32 pack can run on
+CPU. The measured Windows GPU route uses native TensorRT GPT and ONNX Runtime
+CUDA for the acoustic graphs. The [native diffusion guide](docs/native-diffusion.md)
+covers pack preparation, backend selection and reference conditioning.
 
 The tools expect model files and source installations to be provided by the
 operator. Read each upstream model's terms and retain its notices in the pack.
@@ -197,11 +203,14 @@ early clause delivery, optional token streaming, and DirectML support.
 
 See [the benchmark notes](docs/performance.md) for hardware, timing definitions,
 results, and reproduction commands.
+For ABI-2, see the [checkpoint comparison](docs/performance-native-diffusion.md)
+and the [scheduling measurements](docs/performance-native-diffusion-scheduling.md).
 
 ## Current limits
 
-- v2Pro packs only; Mandarin and English are supported.
-- Speed is fixed at 1.0 and acoustic noise at 0.0 by the exported graphs.
+- Native packs support Mandarin and English.
+- ABI-1 exports fix speed at 1.0 and acoustic noise at 0.0. ABI-2 uses its
+  family-specific step count, noise scale and guidance.
 - The cache in the Alice adapter holds one base voice configuration per
   process. The crate itself leaves cache ownership to its host.
 - Cancellation is cooperative between ONNX runs; a running ONNX kernel cannot

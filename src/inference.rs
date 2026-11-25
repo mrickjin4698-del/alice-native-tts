@@ -568,7 +568,7 @@ fn profile_prefix(name: &str) -> Result<Option<PathBuf>> {
     let serial = NEXT_PROFILE.fetch_add(1, Ordering::Relaxed);
     Ok(Some(directory.join(format!("{name}-{serial}"))))
 }
-fn take(out: &mut ort::session::SessionOutputs<'_>, name: &str) -> Result<DynValue> {
+pub(crate) fn take(out: &mut ort::session::SessionOutputs<'_>, name: &str) -> Result<DynValue> {
     out.remove(name)
         .ok_or_else(|| invalid(format!("incompatible ONNX graph: missing {name}")))
 }
@@ -2476,6 +2476,10 @@ fn run_gpt_step_cpu(
 fn pick(values: &DynValue, indices: &DynValue, state: &mut u64) -> Result<i64> {
     let (_, v) = values.try_extract_tensor::<f32>()?;
     let (_, ids) = indices.try_extract_tensor::<i64>()?;
+    pick_topk(v, ids, state)
+}
+
+pub(crate) fn pick_topk(v: &[f32], ids: &[i64], state: &mut u64) -> Result<i64> {
     if v.is_empty() || v.len() != ids.len() || v.iter().any(|x| !x.is_finite()) {
         return Err(invalid("invalid semantic logits"));
     }

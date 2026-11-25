@@ -12,13 +12,14 @@ Windows x64 运行包解压后可直接运行。系统需要 DirectML 和 Micros
 | 模型 | 推理路径 | 流式输出 |
 | --- | --- | --- |
 | ABI-1 v2Pro ONNX | Rust + ONNX Runtime，支持可选 GPU 后端 | 有匹配流式图时分 token 块输出 |
+| ABI-2 v3、v4、V5 Turbo、V5 Dev ONNX | Rust + ONNX Runtime，可选原生 TensorRT GPT | 按文本片段输出，v3 为 24 kHz，其余为 48 kHz |
 | GPT-SoVITS v1、v2、v2Pro、v2ProPlus checkpoint | 本机 GPT-SoVITS Python 子进程 | 分 token 块输出 |
 | GPT-SoVITS v3、v4 checkpoint | 本机 GPT-SoVITS Python 子进程 | 按文本片段输出 |
 | GPT-SoVITS V5 Turbo、V5 Dev checkpoint | 支持 V5 的本机 GPT-SoVITS Python 子进程 | 按文本片段输出 48 kHz PCM |
 
 ## 原生 ONNX 模型
 
-沿用已有 ABI-1 包目录。包有流式图时，命令行自动启用流式接口。
+沿用已有 ABI-1 包目录。包有流式图时，命令行自动启用流式接口。ABI-2 使用同一套命令和 Rust session 接口，导出及运行依赖见[原生扩散指南](native-diffusion.md)。
 
 ```powershell
 alice-tts inspect ./model-pack
@@ -54,6 +55,19 @@ alice-tts worker ./voice.json --gpt-sovits-root 'D:/GPT-SoVITS' --device cuda
 ```
 
 `--device cpu` 使用 PyTorch CPU。`--device cuda` 使用当前 Python 环境里的 CUDA PyTorch。v3 的典型输出为 24 kHz，v4 的典型输出为 48 kHz。调用方使用 `ready.model.sample_rate` 或 `audio.sample_rate` 确认实际采样率。
+
+### Checkpoint TensorRT
+
+使用 `--device tensor_rt` 启用 checkpoint TensorRT 后端。所选 Python 需要 CUDA PyTorch、ONNX 和 TensorRT Python 绑定，系统需要对应的 TensorRT、CUDA 运行库。Windows 上可让 `ALICE_TRT_HOME` 指向 SDK 目录。如果 Python 绑定放在独立目录，可将目录路径赋给 `ALICE_NATIVE_TTS_TRT_PYTHON_PATH`。
+
+```powershell
+$env:ALICE_TRT_HOME = 'C:\TensorRT-11.2.1.2'
+alice-tts worker ./voice.json --gpt-sovits-root 'D:/GPT-SoVITS' --device tensor_rt
+```
+
+各家族使用 TensorRT 执行 GPT Transformer 的预填充和逐 token 解码。v1、v2、v2Pro 和 v2ProPlus 同时使用 TensorRT 执行 VITS 波形生成器。v3、v4 和 V5 同时使用 TensorRT 执行 DiT Transformer 块与声码器。文本和参考音频处理、GPT 采样、VITS 编码和扩散调度由本机 GPT-SoVITS 运行时执行。V5 的 `tensor_rt` 路径使用完整 DiT 块栈，并保留 Turbo 4 步和 Dev 32 步的采样设置。
+
+首次加载时会从当前权重导出并构建引擎。构建时间计入首次启动，后续启动会复用与权重、GPU 和 TensorRT 版本匹配的引擎。默认缓存目录在 Windows 上为 `%LOCALAPPDATA%/alice-native-tts/tensorrt`。可通过 `ALICE_NATIVE_TTS_CHECKPOINT_TRT_CACHE_DIR` 指定缓存目录。引擎面向单请求合成，GPT 预填充最多支持 2,048 token，解码输入缓存最多支持 4,096 token，波形生成器最多支持 4,096 帧。
 
 ## GPT-SoVITS V5
 

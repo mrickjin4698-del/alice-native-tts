@@ -110,6 +110,10 @@ def request(worker, key, text, expected_rate, cancel=False):
 def exercise(args, mode, model, device, expected_rate, streaming, check_cancel, env):
     start = time.monotonic()
     options = ["--device", device]
+    expected_family = mode
+    if mode == "native":
+        pack = json.loads((model / "pack.json").read_text(encoding="utf-8"))
+        expected_family = pack["family"] if pack.get("abi") == 2 else "v2Pro"
     if mode != "native":
         options += ["--gpt-sovits-root", str(args.gpt_sovits_root)]
         if args.python:
@@ -126,13 +130,14 @@ def exercise(args, mode, model, device, expected_rate, streaming, check_cancel, 
             require(ready["device"] == device, "worker device differs")
             info = ready["model"]
             require(info["sample_rate"] == expected_rate and info["streaming"] == streaming, "unexpected model capabilities")
-            require(info["family"] == ("v2Pro" if mode == "native" else mode), "unexpected model family")
+            require(info["family"] == expected_family, "unexpected model family")
             elapsed = round((time.monotonic() - start) * 1000, 2)
             first, pcm = request(worker, "first", FRAGMENTS if streaming == "text_fragments" else TEXT, expected_rate)
             require(first["audio_chunks"] > 1, "streaming test did not exercise multiple chunks")
             result = {"status": "passed", "model": info, "startup_ms": elapsed, "synthesis": first}
             if check_cancel:
-                cancelled, _ = request(worker, "interrupt", FRAGMENTS if mode != "native" else TEXT, expected_rate, cancel=True)
+                long_text = FRAGMENTS if streaming == "text_fragments" else TEXT
+                cancelled, _ = request(worker, "interrupt", long_text, expected_rate, cancel=True)
                 recovered, _ = request(worker, "after-interrupt", TEXT, expected_rate)
                 result.update(cancellation=cancelled, recovery=recovered)
             worker.finish()
@@ -141,7 +146,7 @@ def exercise(args, mode, model, device, expected_rate, streaming, check_cancel, 
     with wave.open(str(args.output / (mode + ".wav")), "wb") as wav:
         wav.setparams((1, 2, expected_rate, 0, "NONE", "not compressed"))
         wav.writeframes(pcm)
-    if mode in ("v4", "v5turbo"):
+    if mode in ("v4", "v5turbo") or (mode == "native" and streaming == "text_fragments"):
         wav_out = args.output / f"{mode}-cli.wav"
         rendered = subprocess.run(
             [str(args.executable), "synthesize", str(model), "--text", TEXT, "--output", str(wav_out), *options],
@@ -164,24 +169,27 @@ def main():
     parse.add_argument("--python", type=Path)
     parse.add_argument("--output", required=True, type=Path)
     parse.add_argument("--native-device", default="cpu")
-    parse.add_argument("--checkpoint-device", choices=("cpu", "cuda"), default="cuda")
-    parse.add_argument("--families", nargs="*", choices=WEIGHTS, default=list(WEIGHTS))
+    parse.add_argument("--checkpoint-device", choices=("cpu", "cuda", "tensor_rt"), default="cuda")
+    parse.add_argument("--families", nargs="*", choices=WEIGHTS)
     parse.add_argument("--skip-native", action="store_true")
     parse.add_argument("--timeout", default=180, type=int)
     args = parse.parse_args()
-    if args.families and args.gpt_sovits_root is None:
-        parse.error("--gpt-sovits-root is required for checkpoint tests")
     for key in ("executable", "native_pack", "gpt_sovits_root", "python", "output"):
         value = getattr(args, key)
         if value is not None:
             setattr(args, key, value.resolve())
-    args.output.mkdir(parents=True, exist_ok=False)
     pack = json.loads((args.native_pack / "pack.json").read_text(encoding="utf-8"))
+    diffusion = pack.get("abi") == 2
+    families = args.families if args.families is not None else ([] if diffusion else list(WEIGHTS))
+    if families and (diffusion or args.gpt_sovits_root is None):
+        parse.error("checkpoint tests require an ABI-1 reference pack and --gpt-sovits-root")
+    args.output.mkdir(parents=True, exist_ok=False)
     env = {key: value for key, value in os.environ.items() if not key.startswith("EVENT_STREAM_")}
     tests = []
     if not args.skip_native:
-        tests.append(("native", args.native_pack, args.native_device, 32000, "semantic_tokens", True))
-    for family in args.families:
+        tests.append(("native", args.native_pack, args.native_device, pack["sample_rate"],
+                      "text_fragments" if diffusion else "semantic_tokens", True))
+    for family in families:
         pre = args.gpt_sovits_root / "GPT_SoVITS" / "pretrained_models"
         gpt, sovits = WEIGHTS[family]
         manifest = args.output / f"{family}.json"

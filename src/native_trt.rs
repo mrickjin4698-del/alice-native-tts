@@ -57,23 +57,26 @@ pub(crate) struct NativeTrtGpt {
 
 impl NativeTrtGpt {
     pub(crate) fn load(model_dir: &Path) -> Result<Self> {
-        let encoder = model_dir.join("gpt_encoder.onnx");
         let step = std::env::var_os("ALICE_NATIVE_TTS_TRT_SHAPE_STEP_ONNX")
             .map(PathBuf::from)
             .unwrap_or_else(|| model_dir.join("gpt_step.onnx"));
+        Self::load_graphs(&model_dir.join("gpt_encoder.onnx"), &step)
+    }
+
+    pub(crate) fn load_graphs(encoder: &Path, step: &Path) -> Result<Self> {
         let cache_dir = engine_cache_dir()?;
         let encoder_plan = cache_dir.join(format!(
             "gpt_encoder-{}-trt112-fp32.plan",
-            model_fingerprint(&encoder)?
+            model_fingerprint(encoder)?
         ));
         let step_plan = cache_dir.join(format!(
             "gpt_step-{}-trt112-fp32.plan",
-            model_fingerprint(&step)?
+            model_fingerprint(step)?
         ));
         std::fs::create_dir_all(&cache_dir)?;
-        let encoder = c_string_path(&encoder)?;
+        let encoder = c_string_path(encoder)?;
         let encoder_plan = c_string_path(&encoder_plan)?;
-        let step = c_string_path(&step)?;
+        let step = c_string_path(step)?;
         let step_plan = c_string_path(&step_plan)?;
         let mut error = [0i8; ERROR_CAPACITY];
         let handle = unsafe {

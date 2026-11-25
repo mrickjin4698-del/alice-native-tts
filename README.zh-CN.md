@@ -2,8 +2,8 @@
 
 [English](README.md)
 
-面向应用和命令行的本地 GPT-SoVITS 推理项目。Rust 原生引擎运行 v2Pro
-ONNX 模型包。checkpoint 适配使用本机 GPT-SoVITS 运行时，支持 v1、v2、
+面向应用和命令行的本地 GPT-SoVITS 推理项目。Rust 原生引擎运行 v2Pro ABI-1
+及 v3、v4、V5 Turbo、V5 Dev ABI-2 模型包。checkpoint 适配使用本机 GPT-SoVITS 运行时，支持 v1、v2、
 v2Pro、v2ProPlus、v3、v4、V5 Turbo 和 V5 Dev。
 
 仓库提供推理源码和模型包准备工具。模型权重和参考声线由模型包作者单独
@@ -24,7 +24,7 @@ v2Pro、v2ProPlus、v3、v4、V5 Turbo 和 V5 Dev。
 - 支持若干数字、日期、时间、金额、百分比和温度格式的文本规范化。
 - 默认使用 CPU；Windows 可显式选择实验性的 DirectML 后端。
 - CUDA/TensorRT 的 GPT 路径保留 CPU 前端和声码器。另有 R1.2 文档说明的实验性流式 VITS CUDA EP 路径。GPT Step 始终禁止 CPU 回退；Encoder 默认严格放置，只有显式诊断模式才允许审计过的 CPU 辅助节点。
-- 模型包带有匹配的 ABI-1 流式图时，可启用 token 流式合成。
+- 带有匹配流式图的 ABI-1 模型包按 token 块输出。ABI-2 扩散模型按文本片段输出 PCM。
 - 在 ONNX 图运行之间协作式响应取消。
 
 文本前端范围有限，不等同于 GPT-SoVITS Python 前端的完整实现。具体限制见
@@ -32,8 +32,8 @@ v2Pro、v2ProPlus、v3、v4、V5 Turbo 和 V5 Dev。
 
 ## 快速开始
 
-安装稳定版 Rust 工具链，并准备一个兼容的 ABI-1 模型包。所需文件及准备
-方法见[模型包](#模型包)。
+安装稳定版 Rust 工具链，并准备一个兼容的模型包。下面的示例使用 ABI-1。
+ABI-2 使用独立命令行或 Rust session 接口。准备方法见[模型包](#模型包)。
 
 使用 CPU 合成 WAV：
 
@@ -74,8 +74,8 @@ cargo run --release --example stream_bench -- ./model-pack ./output cpu
 
 ## 模型包
 
-推理需要 ABI-1、`v2Pro` 架构、32 kHz 采样率及 512-token GPT KV 容量的模型
-包。基础包包含 ONNX 图、前端数据、参考 WAV 及其文本，并须带有记录来源的
+ABI-1 的 `v2Pro` 模型包以 32 kHz 输出，GPT KV 容量为 512 token。
+基础包包含 ONNX 图、前端数据、参考 WAV 及其文本，并须带有记录来源的
 `LICENSES.txt`。`pack.json` 声明 ABI 和参考文件。启用 token 流式还需
 `sovits_stream.onnx` 以及匹配的流式元数据。
 
@@ -83,6 +83,10 @@ cargo run --release --example stream_bench -- ./model-pack ./output cpu
 GPT-SoVITS 安装准备模型包。Python 只用于这个离线准备步骤，运行时推理由
 Rust 完成。可选流式图由 `tools/export-native-tts-stream.py` 导出并进行数值
 对齐检查。
+
+ABI-2 支持 v3、v4、V5 Turbo 和 V5 Dev。Rust 调度 GPT、目标特征、扩散步和
+声码器，v3 输出 24 kHz，其余输出 48 kHz。Windows 实测路径使用原生 TensorRT
+GPT 和 ONNX Runtime CUDA 声学图。离线导出、依赖及参考条件见[原生扩散指南](docs/native-diffusion.md)。
 
 工具要求操作者自行提供模型文件和源码目录。请核对各上游模型的授权，并在
 模型包中保留来源声明。本源码仓库不应放入模型权重、声线参考录音或生成的
@@ -104,11 +108,13 @@ Project Alice 的桌面适配器留在主项目中，负责提供方选择、共
 优先交付、可选 token 流式和 DirectML 等针对性处理。
 
 硬件信息、计时口径、结果和复现命令见[性能记录](docs/performance.md)。
+ABI-2 的结果见[同权重 checkpoint 对比](docs/performance-native-diffusion.md)
+和[调度测试](docs/performance-native-diffusion-scheduling.md)。
 
 ## 当前限制
 
-- 仅支持 v2Pro 模型包及中文、英文。
-- 导出图的语速固定为 1.0，声学噪声固定为 0.0。
+- 原生模型包支持中文、英文。
+- ABI-1 导出图的语速固定为 1.0，声学噪声固定为 0.0。ABI-2 按模型家族固定扩散步数、初始噪声和 guidance。
 - Alice 适配器的进程内缓存只保留一种基础声线配置；crate 本身将缓存所有权
   留给宿主程序。
 - 取消只能在 ONNX 图运行之间协作处理，不能强制中断正在执行的 ONNX kernel。
