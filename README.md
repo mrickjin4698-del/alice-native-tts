@@ -2,14 +2,23 @@
 
 [简体中文](README.zh-CN.md)
 
-A Rust inference engine for GPT-SoVITS v2Pro ONNX model packs. The inference
-library runs locally and does not start Python or an HTTP service. It supports
-Mandarin and English text, CPU inference, optional Windows DirectML, clause
-audio delivery, and an experimental token-streaming pack extension.
+Local GPT-SoVITS synthesis for applications and the command line. The native
+Rust engine runs v2Pro ONNX packs. The checkpoint adapter runs v1, v2, v2Pro,
+v2ProPlus, v3 and v4 through an installed GPT-SoVITS runtime in a local process.
 
 This repository contains the inference code and pack preparation tools. Model
 weights and reference voices are supplied separately by each pack author and
 are not included here.
+
+## Standalone CLI
+
+Build `alice-tts` with `cargo build --locked --release --bin alice-tts`. The CLI
+inspects a model, synthesizes PCM16 WAV, or runs a persistent JSONL worker with
+warmup, streaming and cancellation. Rust clients can use the same model loader
+and synthesis interface through `alice_native_tts::session`.
+
+See the [standalone guide](docs/standalone.md) for supported checkpoints, model
+manifests, devices, installation and the JSONL protocol.
 
 ## Features
 

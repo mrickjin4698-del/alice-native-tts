@@ -2,9 +2,10 @@
 name = "alice-native-tts"
 version = "0.1.0"
 edition = "2021"
-description = "Local GPT-SoVITS v2Pro ONNX inference in Rust"
+description = "Standalone local GPT-SoVITS synthesis and streaming"
 license = "Apache-2.0"
 readme = "README.md"
+repository = "https://github.com/mrickjin4698-del/alice-native-tts"
 keywords = ["tts", "gpt-sovits", "onnx", "speech"]
 categories = ["multimedia::audio"]
 
@@ -23,6 +24,7 @@ r2-trt-native = ["ort/load-dynamic"]
 r2-trt-native-cuda-vits = ["r2-trt-native", "r1-cuda-ep"]
 
 [dependencies]
+base64 = "0.22"
 ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 serde = { version = "1", features = ["derive"] }

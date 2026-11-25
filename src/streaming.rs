@@ -158,6 +158,13 @@ fn measure_profiled<T>(
 }
 
 impl StreamDecoder {
+    pub(crate) fn release_session_binding(&mut self) {
+        #[cfg(feature = "r1-cuda-ep")]
+        {
+            self.cuda_io_binding = None;
+        }
+    }
+
     pub(crate) fn enable_preview_refill_mode(&mut self) {
         self.preview_refill_mode = true;
     }

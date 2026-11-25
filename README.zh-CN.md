@@ -2,12 +2,19 @@
 
 [English](README.md)
 
-用 Rust 实现的 GPT-SoVITS v2Pro ONNX 本地推理引擎。推理时不启动 Python
-或 HTTP 服务，支持中文和英文、CPU、Windows 上的实验性 DirectML、按分句
-交付音频，以及需要额外模型图的实验性 token 流式模式。
+面向应用和命令行的本地 GPT-SoVITS 推理项目。Rust 原生引擎运行 v2Pro
+ONNX 模型包。checkpoint 适配使用本机 GPT-SoVITS 运行时，支持 v1、v2、
+v2Pro、v2ProPlus、v3 和 v4。
 
 仓库提供推理源码和模型包准备工具。模型权重和参考声线由模型包作者单独
 提供，本仓库不包含这些文件。
+
+## 独立命令行
+
+用 `cargo build --locked --release --bin alice-tts` 构建命令行程序。它支持
+模型检查、WAV 合成和常驻 JSONL 流式服务。Rust 应用可以通过
+`alice_native_tts::session` 访问同一套模型加载和合成接口。使用方法、模型
+清单和进程协议见[独立使用指南](docs/standalone.md)。
 
 ## 功能
 

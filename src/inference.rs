@@ -169,6 +169,23 @@ pub(crate) fn open_on(dir: &Path, name: &str, backend: Backend) -> Result<Sessio
     open_path(&dir.join(format!("{name}.onnx")), name, backend)
 }
 
+// Experimental bounded cache: one extra session dedicated to the ordinary
+// 24-token first chunk. Models, tensor shapes and audio output stay unchanged.
+fn open_first_vits(dir: &Path, streaming: bool, backend: Backend) -> Result<Option<Session>> {
+    #[cfg(feature = "r1-cuda-ep")]
+    if streaming
+        && backend == Backend::Cuda
+        && std::env::var("ALICE_NATIVE_TTS_FIRST_VITS_SESSION")
+            .ok()
+            .as_deref()
+            == Some("1")
+    {
+        return Ok(Some(open_on(dir, "sovits_stream", backend)?));
+    }
+    let _ = (dir, streaming, backend);
+    Ok(None)
+}
+
 fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
     let _load_trace = match name {
         "bert" => Some(LoadTrace::begin("session:bert")),
@@ -1060,6 +1077,7 @@ pub struct NativeTts {
     step_init: Option<Session>,
     step_cache_layout: GptStepCacheLayout,
     sovits: Session,
+    first_sovits: Option<Session>,
     prompts: Tensor<i64>,
     #[cfg(feature = "r2-trt-native")]
     prompt_ids: Vec<i64>,
@@ -1292,6 +1310,8 @@ impl NativeTts {
         )?;
         drop(_trace);
         check(cancel)?;
+        let first_sovits = open_first_vits(dir, config.streaming, vocoder_backend)?;
+        check(cancel)?;
         if reference_phones.len() + prompt_tokens + 32 >= 512 {
             return Err(invalid("reference exceeds KV cache budget"));
         }
@@ -1315,6 +1335,7 @@ impl NativeTts {
             step_init,
             step_cache_layout,
             sovits,
+            first_sovits,
             prompts,
             #[cfg(feature = "r2-trt-native")]
             prompt_ids,
@@ -1348,6 +1369,9 @@ impl NativeTts {
             paths.push(PathBuf::from(step_init.end_profiling()?));
         }
         paths.push(PathBuf::from(self.sovits.end_profiling()?));
+        if let Some(first) = self.first_sovits.as_mut() {
+            paths.push(PathBuf::from(first.end_profiling()?));
+        }
         paths.extend(self.frontend.finish_ort_profiling()?);
         self.ort_profiling = false;
         Ok(paths)
@@ -1381,7 +1405,10 @@ impl NativeTts {
             next_backend,
         )?;
         check(cancel)?;
+        let next_first = open_first_vits(&self.model_dir, enabled, next_backend)?;
+        check(cancel)?;
         self.sovits = next;
+        self.first_sovits = next_first;
         self.vocoder_backend = next_backend;
         self.streaming = enabled;
         self.warmed = false;
@@ -2069,8 +2096,22 @@ impl NativeTts {
                     }
                     stitched
                 } else {
-                    decoder.decode(
-                        &mut self.sovits,
+                    let use_first = cuda_vits_active
+                        && audio_chunks == 0
+                        && first_chunk_tokens == CHUNK_TOKENS
+                        && chunk_tokens == CHUNK_TOKENS
+                        && tokens.len() == CHUNK_TOKENS
+                        && preview_refill_at.is_none()
+                        && self.first_sovits.is_some();
+                    let session = if use_first {
+                        self.first_sovits
+                            .as_mut()
+                            .expect("checked first VITS session")
+                    } else {
+                        &mut self.sovits
+                    };
+                    let audio = decoder.decode(
+                        session,
                         &tokens,
                         &phones,
                         &self.spec,
@@ -2079,7 +2120,13 @@ impl NativeTts {
                         cuda_vits_active,
                         cancel,
                         profile,
-                    )?
+                    )?;
+                    if use_first {
+                        // I/O bindings belong to their session; retain latent/tail
+                        // audio but recreate binding for the ordinary continuation.
+                        decoder.release_session_binding();
+                    }
+                    audio
                 };
                 profile.finish_event("first_vits", first_vits_event, Some(audio_chunks));
                 vocoder_ms += decode_started.elapsed().as_secs_f64() * 1000.0;

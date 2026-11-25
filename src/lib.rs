@@ -1,5 +1,5 @@
-//! Local inference for the versioned Alice GPT-SoVITS v2Pro ONNX pack.
-//! Training/export are offline operations; runtime inference does not start Python.
+//! Local GPT-SoVITS synthesis. The native API loads ABI-1 ONNX packs.
+//! The session API also supports checkpoints through a local GPT-SoVITS runtime.
 mod audio;
 mod frontend;
 mod inference;
@@ -8,6 +8,7 @@ mod native_trt;
 #[cfg(all(feature = "r1-cuda-ep", windows))]
 mod nvtx;
 pub mod profiling;
+pub mod session;
 mod streaming;
 pub use frontend::normalize::normalize as normalize_text;
 pub use inference::{ChunkInfo, NativeTts, SynthesisTimings};
