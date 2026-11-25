@@ -128,6 +128,22 @@ The `stream_bench` example requires a pack with the optional streaming graph:
 cargo run --release --example stream_bench -- ./model-pack ./output cpu
 ```
 
+#### Host shape input for the native GPT step
+
+On the native TensorRT backend, an ABI-1 step graph can take its active KV
+length from a host shape input. Generate a separate graph from the pack's
+original step and set the override before loading the model.
+
+```powershell
+python tools/prepare-native-active-len.py ./model-pack/gpt_step.onnx ./target/active-len/gpt_step.onnx
+$env:ALICE_NATIVE_TTS_TRT_SHAPE_STEP_ONNX = (Resolve-Path ./target/active-len/gpt_step.onnx).Path
+$env:ALICE_NATIVE_TTS_TRT_CACHE_DIR = Join-Path (Get-Location) 'target/active-len-engines'
+cargo run --locked --release --features "r0-profiling r2-trt-native-cuda-vits" --example r0_profile -- ./model-pack ./target/active-len-profile tensor_rt_native --chunks=24 --warmups=5 --repeats=10 --cuda-vits --cuda-vits-allow-cpu
+```
+
+With the override unset, the runner loads the packed step graph from the
+model directory. The engine cache keys include the model file fingerprint.
+
 ## Model packs
 
 Inference requires an ABI-1 `v2Pro` pack at 32 kHz with a 512-token GPT KV

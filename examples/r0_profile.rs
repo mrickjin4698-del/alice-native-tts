@@ -335,6 +335,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "model_load_ms": load_ms,
             "warmup_runs": if ort_profile { 0 } else { warmups },
             "gpt_step_graph": step_graph,
+            "native_trt_shape_step_onnx": std::env::var("ALICE_NATIVE_TTS_TRT_SHAPE_STEP_ONNX").ok(),
             "gpt_execution_backend": gpt_execution_backend,
             "gpt_kv_cache_storage": if native_trt_gpt { "native_cuda_ping_pong" } else if ort_cuda_gpt { "ort_cuda_io_binding" } else { "host" },
             "gpt_step_intra_threads": gpt_step_threads,
@@ -402,6 +403,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let final_report = json!({
         "backend": backend,
         "gpt_step_graph": step_graph,
+        "native_trt_shape_step_onnx": std::env::var("ALICE_NATIVE_TTS_TRT_SHAPE_STEP_ONNX").ok(),
         "gpt_execution_backend": gpt_execution_backend,
         "gpt_kv_cache_storage": if native_trt_gpt { "native_cuda_ping_pong" } else if ort_cuda_gpt { "ort_cuda_io_binding" } else { "host" },
         "gpt_step_intra_threads": gpt_step_threads,

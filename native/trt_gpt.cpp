@@ -287,7 +287,8 @@ EngineContext load_or_build_engine(std::filesystem::path const& onnx_path,
 
     bool dynamic_inputs = false;
     for (int32_t index = 0; index < network->getNbInputs(); ++index) {
-      dynamic_inputs |= has_dynamic_dimension(network->getInput(index)->getDimensions());
+      dynamic_inputs |= has_dynamic_dimension(network->getInput(index)->getDimensions()) ||
+                        network->getInput(index)->isShapeTensor();
     }
     if (dynamic_inputs) {
       IOptimizationProfile* profile = builder->createOptimizationProfile();
@@ -295,6 +296,17 @@ EngineContext load_or_build_engine(std::filesystem::path const& onnx_path,
       for (int32_t index = 0; index < network->getNbInputs(); ++index) {
       auto* input = network->getInput(index);
       Dims const source = input->getDimensions();
+      if (input->isShapeTensor()) {
+        if (std::strcmp(input->getName(), "active_len") != 0) {
+          fail("unexpected native GPT shape input");
+        }
+        int64_t const minimum = 1, optimum = 256, maximum = 512;
+        if (!profile->setShapeValuesV2(input->getName(), OptProfileSelector::kMIN, &minimum, 1) ||
+            !profile->setShapeValuesV2(input->getName(), OptProfileSelector::kOPT, &optimum, 1) ||
+            !profile->setShapeValuesV2(input->getName(), OptProfileSelector::kMAX, &maximum, 1)) {
+          fail("could not configure active_len shape profile");
+        }
+      }
       if (!has_dynamic_dimension(source)) continue;
       Dims const minimum = make_profile_dims(source, true);
       Dims const optimum = make_profile_dims(source, false);
@@ -365,6 +377,19 @@ class GptRunner {
     prepare_encoder_context();
     prepare_step_context();
     allocate_buffers();
+    for (int32_t i = 0; i < step_.engine->getNbIOTensors(); ++i) {
+      if (std::strcmp(step_.engine->getIOTensorName(i), "active_len") == 0) {
+        if (step_.engine->getTensorLocation("active_len") != TensorLocation::kHOST ||
+            !step_.engine->isShapeInferenceIO("active_len") ||
+            step_.engine->getTensorDataType("active_len") != DataType::kINT64 ||
+            tensor_elements(step_.engine->getTensorShape("active_len"), "active_len") != 1) {
+          fail("active_len must be a host INT64[1] shape input");
+        }
+        host_active_len_.allocate(sizeof(int64_t));
+        active_len_input_ = true;
+        set_address(*step_.context, "active_len", host_active_len_.get());
+      }
+    }
   }
 
   void run_encoder(int64_t const* phoneme_ids, size_t phoneme_count,
@@ -457,6 +482,19 @@ class GptRunner {
     }
     if (token_index < 0 || token_index >= 512) {
       fail("GPT Step token index is outside the ABI-1 cache");
+    }
+    if (active_len_input_) {
+      int64_t const x_length = *static_cast<int64_t*>(host_x_length_.get());
+      int64_t const y_length = *static_cast<int64_t*>(host_y_length_.get());
+      if (x_length < 0 || y_length < 0 || x_length > static_cast<int64_t>(kMaxSequence) ||
+          y_length > static_cast<int64_t>(kMaxSequence)) {
+        fail("native GPT encoder lengths are outside the ABI-1 cache");
+      }
+      int64_t const active_len = x_length + y_length + token_index + 1;
+      if (active_len < 1 || active_len > static_cast<int64_t>(kMaxSequence)) {
+        fail("native GPT active_len is outside the ABI-1 cache");
+      }
+      *static_cast<int64_t*>(host_active_len_.get()) = active_len;
     }
     check_cuda(cudaSetDevice(0), "cudaSetDevice");
     *static_cast<int64_t*>(host_sample_.get()) = sample;
@@ -699,6 +737,8 @@ class GptRunner {
   size_t topk_count_{0};
   int32_t current_cache_{0};
   bool cache_initialized_{false};
+  bool active_len_input_{false};
+  PinnedBuffer host_active_len_;
 };
 
 void set_error(char* output, size_t capacity, std::string const& message) {

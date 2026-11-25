@@ -58,7 +58,9 @@ pub(crate) struct NativeTrtGpt {
 impl NativeTrtGpt {
     pub(crate) fn load(model_dir: &Path) -> Result<Self> {
         let encoder = model_dir.join("gpt_encoder.onnx");
-        let step = model_dir.join("gpt_step.onnx");
+        let step = std::env::var_os("ALICE_NATIVE_TTS_TRT_SHAPE_STEP_ONNX")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| model_dir.join("gpt_step.onnx"));
         let cache_dir = engine_cache_dir()?;
         let encoder_plan = cache_dir.join(format!(
             "gpt_encoder-{}-trt112-fp32.plan",
@@ -94,6 +96,8 @@ impl NativeTrtGpt {
         prompt_ids: &[i64],
         bert_features: &[f32],
     ) -> Result<(Vec<f32>, Vec<i64>, i64, i64)> {
+        #[cfg(all(windows, feature = "r1-cuda-ep"))]
+        let _range = crate::nvtx::Range::push(b"gpt_encoder_native_trt\0");
         let mut values = vec![0.0f32; TOPK_CAPACITY];
         let mut indices = vec![0i64; TOPK_CAPACITY];
         let mut count = 0usize;
@@ -131,6 +135,8 @@ impl NativeTrtGpt {
         sample: i64,
         token_index: usize,
     ) -> Result<(Vec<f32>, Vec<i64>)> {
+        #[cfg(all(windows, feature = "r1-cuda-ep"))]
+        let _range = crate::nvtx::Range::push(b"gpt_step_native_trt\0");
         let mut values = vec![0.0f32; TOPK_CAPACITY];
         let mut indices = vec![0i64; TOPK_CAPACITY];
         let mut count = 0usize;
@@ -224,4 +230,65 @@ fn model_fingerprint(path: &Path) -> Result<String> {
         }
     }
     Ok(format!("{hash:016x}"))
+}
+
+#[cfg(test)]
+mod repeatability_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires local TRT/CUDA runtime and ABI-1 model fixture; run serially"]
+    fn native_topk_reset_repeatability() {
+        let pack = std::env::var_os("ALICE_NATIVE_TTS_TEST_PACK").expect("set fixture directory");
+        let output =
+            std::env::var_os("ALICE_NATIVE_TTS_TEST_TOPK_OUTPUT").expect("set unique output file");
+        assert!(
+            !Path::new(&output).exists(),
+            "do not overwrite prior evidence"
+        );
+        let mut runner = NativeTrtGpt::load(Path::new(&pack)).unwrap();
+        assert!(runner.run_step(1, 0).is_err());
+        let mut requests = Vec::new();
+        for (phonemes, prompts) in [(4usize, 4usize), (7, 5), (4, 4)] {
+            runner.reset();
+            assert!(runner.run_step(1, 0).is_err());
+            let encoder = runner
+                .run_encoder(
+                    &vec![1; phonemes],
+                    &vec![3; prompts],
+                    &vec![0.0; 1024 * phonemes],
+                )
+                .unwrap();
+            let mut steps = Vec::new();
+            for idx in 0..16 {
+                // Predetermined identical inputs isolate DMA from sampling.
+                let (values, indices) = runner.run_step((idx * 7 + 1) as i64, idx).unwrap();
+                assert!(values.iter().all(|x| x.is_finite()));
+                steps.push((values, indices));
+            }
+            // Exercise a late valid cache boundary with identical synthetic cache
+            // contents in both modes (not a natural-language quality test).
+            let last_index = (511 - encoder.2 - encoder.3) as usize;
+            for idx in [247, last_index] {
+                let (values, indices) = runner.run_step(1, idx).unwrap();
+                assert!(values.iter().all(|x| x.is_finite()));
+                steps.push((values, indices));
+            }
+            if std::env::var_os("ALICE_NATIVE_TTS_TRT_SHAPE_STEP_ONNX").is_some() {
+                assert!(runner.run_step(1, last_index + 1).is_err());
+                assert_eq!(
+                    runner.run_step(1, last_index).unwrap(),
+                    *steps.last().unwrap(),
+                    "rejected active length must not corrupt cache"
+                );
+            }
+            assert!(runner.run_step(1, 512).is_err());
+            requests.push((encoder, steps));
+        }
+        assert_eq!(
+            requests[0], requests[2],
+            "reset must restore deterministic top-k outputs"
+        );
+        std::fs::write(output, serde_json::to_vec_pretty(&requests).unwrap()).unwrap();
+    }
 }
