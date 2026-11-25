@@ -162,6 +162,7 @@ def main():
     cli.add_argument("--output", type=Path, required=True)
     cli.add_argument("--native-device", default="tensor_rt_native")
     cli.add_argument("--checkpoint-device", choices=["cuda", "tensor_rt"], default="tensor_rt")
+    cli.add_argument("--checkpoint-report", type=Path, help="Reuse matching checkpoint measurements from this benchmark.json")
     cli.add_argument("--samples", type=int, default=8)
     cli.add_argument("--warmups", type=int, default=3)
     cli.add_argument("--timeout", type=int, default=300)
@@ -171,6 +172,12 @@ def main():
         cli.error("requires two or more samples, one or more warmups and unique workloads")
     for name in ("executable", "python", "output"):
         setattr(args, name, getattr(args, name).resolve())
+    baseline = read(args.checkpoint_report) if args.checkpoint_report else None
+    selected = {name: WORKLOADS[name] for name in args.workload}
+    if baseline:
+        if (baseline["samples_per_case"] != args.samples or baseline["warmups"] != args.warmups
+                or any(baseline["workloads"].get(name) != text for name, text in selected.items())):
+            cli.error("checkpoint report has different workloads or sample counts")
     args.output.mkdir(parents=True, exist_ok=False)
     worker = runpy.run_path(str(Path(__file__).with_name("check-standalone.py")))["Worker"]
     try:
@@ -179,8 +186,19 @@ def main():
     except (OSError, subprocess.SubprocessError):
         gpu = None
     report = {"gpu": gpu, "executable_sha256": sha(args.executable), "warmups": args.warmups,
-              "samples_per_case": args.samples, "workloads": {name: WORKLOADS[name] for name in args.workload},
+              "samples_per_case": args.samples, "workloads": selected,
               "case_order": [], "models": {}, "cases": {}}
+    if baseline:
+        if baseline["gpu"] != gpu or gpu is None:
+            cli.error("checkpoint report must come from the same GPU and driver")
+        report["checkpoint_source_sha256"] = sha(args.checkpoint_report)
+    if args.native_device == "tensor_rt_native":
+        report["native_tensorrt_acoustics"] = bool(os.environ.get("ALICE_NATIVE_TTS_DIFFUSION_TRT_ROOT"))
+        report["native_tensorrt_target"] = os.environ.get("ALICE_NATIVE_TTS_DIFFUSION_TRT_TARGET", "")
+        report["native_gpt_fp16_cache"] = bool(os.environ.get("ALICE_NATIVE_TTS_DIFFUSION_GPT_FP16_DIR"))
+        report["native_cuda_target_tuning"] = os.environ.get("ALICE_NATIVE_TTS_DIFFUSION_CUDA_TARGET", "")
+        report["native_v3_target_buckets"] = bool(os.environ.get("ALICE_NATIVE_TTS_DIFFUSION_V3_BUCKETS"))
+        report["native_rolling_pcm"] = os.environ.get("ALICE_NATIVE_TTS_DIFFUSION_ROLLING_PCM") == "1"
     path = args.output / "benchmark.json"
     for pack_dir, checkpoint_path, runtime in args.model:
         pack_dir, checkpoint_path, runtime = [Path(value).resolve() for value in (pack_dir, checkpoint_path, runtime)]
@@ -197,8 +215,16 @@ def main():
             "gpt_checkpoint_sha256", "sovits_checkpoint_sha256", "reference_audio_sha256",
             "precision", "export_validation")}
         for is_native in (True, False):
-            label, result = bench(worker, args, pack_dir if is_native else checkpoint_path, family, is_native,
-                                  runtime, config["sample_rate"])
+            if baseline and not is_native:
+                label = family + "_checkpoint"
+                result = baseline["cases"][label]
+                if (baseline["models"][family] != report["models"][family]
+                        or result["device"] != args.checkpoint_device or result["sample_rate"] != config["sample_rate"]):
+                    raise ValueError(f"checkpoint report differs in {family} weights, sample rate or device")
+                result = {**result, "workloads": {name: result["workloads"][name] for name in selected}}
+            else:
+                label, result = bench(worker, args, pack_dir if is_native else checkpoint_path, family, is_native,
+                                      runtime, config["sample_rate"])
             report["case_order"].append(label)
             report["cases"][label] = result
             draft = path.with_suffix(".tmp")

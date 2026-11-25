@@ -97,7 +97,7 @@ def reference_data(torch, model, spec, reference_limit):
         mel[..., :frames][..., -reference_limit:], speaker
 
 
-def make_graphs(torch, model, family, steps, guidance):
+def make_graphs(torch, model, family, steps, guidance, *, step_variant="serial"):
     from torch import nn
     from torch.nn import functional as F
 
@@ -168,11 +168,21 @@ def make_graphs(torch, model, family, steps, guidance):
             time_embedding = self.dit.time_embed(t)
             if not is_v5:
                 time_embedding = time_embedding + self.dit.d_embed(torch.ones_like(t) * (1.0 / steps))
-            mask = torch.ones_like(generation_mask[:, 0], dtype=torch.bool)
+            mask = torch.ones_like(generation_mask[:, 0], dtype=torch.bool) if step_variant == "serial" else None
             rope = (freqs.to(dtype), 1.0)
-            v = self.predict(x.transpose(1, 2), time_embedding, mask, rope, condition)
+            x_frames = x.transpose(1, 2)
+            if step_variant == "batched":
+                paired = self.predict(
+                    torch.cat((x_frames, x_frames), dim=0),
+                    torch.cat((time_embedding, time_embedding), dim=0),
+                    None, rope, torch.cat((condition, negative), dim=0),
+                )
+                v, negative_v = paired[:1], paired[1:]
+            else:
+                v = self.predict(x_frames, time_embedding, mask, rope, condition)
+                if guidance:
+                    negative_v = self.predict(x_frames, time_embedding, mask, rope, negative)
             if guidance:
-                negative_v = self.predict(x.transpose(1, 2), time_embedding, mask, rope, negative)
                 v = v + (v - negative_v) * guidance
             updated = x + (1.0 / steps) * v
             return torch.where(generation_mask > 0, updated, torch.zeros_like(updated)).float()

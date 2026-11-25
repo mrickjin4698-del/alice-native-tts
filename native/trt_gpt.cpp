@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -98,8 +99,8 @@ class DeviceBuffer {
   void allocate(size_t bytes) {
     reset();
     if (bytes == 0) fail("TensorRT device buffer cannot be empty");
+    check_cuda(cudaMalloc(&pointer_, bytes), "cudaMalloc");
     bytes_ = bytes;
-    check_cuda(cudaMalloc(&pointer_, bytes_), "cudaMalloc");
   }
   void reset() noexcept {
     if (pointer_) cudaFree(pointer_);
@@ -108,6 +109,9 @@ class DeviceBuffer {
   }
   void* get() const noexcept { return pointer_; }
   size_t size() const noexcept { return bytes_; }
+  void reserve(size_t bytes) {
+    if (bytes > bytes_) allocate(bytes);
+  }
 
  private:
   void* pointer_{nullptr};
@@ -159,10 +163,12 @@ size_t element_size(DataType type) {
   switch (type) {
     case DataType::kFLOAT:
       return sizeof(float);
+    case DataType::kHALF:
+      return sizeof(uint16_t);
     case DataType::kINT64:
       return sizeof(int64_t);
     default:
-      fail("GPT TensorRT graph expected only FP32 and INT64 tensors");
+      fail("TensorRT graph expected FP16, FP32 or INT64 bindings");
   }
 }
 
@@ -172,15 +178,23 @@ size_t tensor_elements(Dims const& dims, char const* name) {
     if (dims.d[axis] <= 0) {
       fail(std::string("TensorRT produced a non-static shape for ") + name);
     }
-    count *= static_cast<size_t>(dims.d[axis]);
+    size_t const dim = static_cast<size_t>(dims.d[axis]);
+    if (dim > std::numeric_limits<size_t>::max() / count) {
+      fail(std::string("TensorRT tensor size overflow for ") + name);
+    }
+    count *= dim;
   }
   return count;
 }
 
 size_t tensor_bytes(IExecutionContext& context, ICudaEngine& engine,
                     char const* name) {
-  return tensor_elements(context.getTensorShape(name), name) *
-         element_size(engine.getTensorDataType(name));
+  auto const count = tensor_elements(context.getTensorShape(name), name);
+  auto const size = element_size(engine.getTensorDataType(name));
+  if (count > std::numeric_limits<size_t>::max() / size) {
+    fail(std::string("TensorRT tensor byte count overflow for ") + name);
+  }
+  return count * size;
 }
 
 void set_address(IExecutionContext& context, char const* name, void* pointer) {
@@ -235,6 +249,20 @@ Dims make_profile_max_dims(Dims source) {
   return source;
 }
 
+std::unique_ptr<ICudaEngine> read_plan(IRuntime& runtime,
+                                      std::filesystem::path const& path) {
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  if (!input) return nullptr;
+  auto const length = input.tellg();
+  if (length <= 0) return nullptr;
+  std::vector<char> bytes(static_cast<size_t>(length));
+  input.seekg(0);
+  input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  if (!input) return nullptr;
+  return std::unique_ptr<ICudaEngine>(
+      runtime.deserializeCudaEngine(bytes.data(), bytes.size()));
+}
+
 EngineContext load_or_build_engine(std::filesystem::path const& onnx_path,
                                    std::filesystem::path const& plan_path) {
   EngineContext result;
@@ -242,19 +270,7 @@ EngineContext load_or_build_engine(std::filesystem::path const& onnx_path,
   if (!result.runtime) fail("TensorRT runtime creation failed");
 
   if (std::filesystem::exists(plan_path)) {
-    std::ifstream input(plan_path, std::ios::binary | std::ios::ate);
-    if (input) {
-      auto const length = input.tellg();
-      if (length > 0) {
-        std::vector<char> bytes(static_cast<size_t>(length));
-        input.seekg(0);
-        input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-        if (input) {
-          result.engine.reset(result.runtime->deserializeCudaEngine(
-              bytes.data(), bytes.size()));
-        }
-      }
-    }
+    result.engine = read_plan(*result.runtime, plan_path);
     if (!result.engine) {
       std::fprintf(stderr,
                    "[TensorRT] cached plan could not be loaded; rebuilding %s\n",
@@ -692,8 +708,15 @@ class GptRunner {
         tensor_bytes(*step_.context, *step_.engine, "k_cache_new");
     size_t const new_value =
         tensor_bytes(*step_.context, *step_.engine, "v_cache_new");
+    auto const cache_type = encoder_.engine->getTensorDataType("k_cache");
     if (encoder_key != step_key || encoder_value != step_value ||
-        step_key != new_key || step_value != new_value) {
+        step_key != new_key || step_value != new_value ||
+        (cache_type != DataType::kFLOAT && cache_type != DataType::kHALF) ||
+        encoder_.engine->getTensorDataType("v_cache") != cache_type ||
+        step_.engine->getTensorDataType("k_cache") != cache_type ||
+        step_.engine->getTensorDataType("v_cache") != cache_type ||
+        step_.engine->getTensorDataType("k_cache_new") != cache_type ||
+        step_.engine->getTensorDataType("v_cache_new") != cache_type) {
       fail("GPT Encoder and Step cache buffer shapes do not match");
     }
     for (int index = 0; index < 2; ++index) {
@@ -739,6 +762,177 @@ class GptRunner {
   bool cache_initialized_{false};
   bool active_len_input_{false};
   PinnedBuffer host_active_len_;
+};
+
+// A strongly typed ABI-2 graph. Device buffers grow on demand and are reused
+// across shapes. Solver calls keep both copies of the evolving state on CUDA.
+class GraphRunner {
+ public:
+  explicit GraphRunner(std::filesystem::path const& plan) {
+    check_cuda(cudaSetDevice(0), "cudaSetDevice");
+    stream_ = std::make_unique<CudaStream>();
+    graph_.runtime.reset(createInferRuntime(g_logger));
+    if (!graph_.runtime) fail("TensorRT runtime creation failed");
+    graph_.engine = read_plan(*graph_.runtime, plan);
+    if (!graph_.engine) fail("could not load TensorRT plan " + plan.string());
+    graph_.context.reset(graph_.engine->createExecutionContext());
+    if (!graph_.context) fail("TensorRT graph context creation failed");
+    for (int32_t index = 0; index < graph_.engine->getNbIOTensors(); ++index) {
+      char const* name = graph_.engine->getIOTensorName(index);
+      bool const input = graph_.engine->getTensorIOMode(name) == TensorIOMode::kINPUT;
+      auto const type = graph_.engine->getTensorDataType(name);
+      if (graph_.engine->getTensorFormat(name) != TensorFormat::kLINEAR ||
+          graph_.engine->getTensorLocation(name) != TensorLocation::kDEVICE ||
+          graph_.engine->isShapeInferenceIO(name) ||
+          (!input && type != DataType::kFLOAT)) {
+        fail(std::string("unsupported ABI-2 TensorRT binding ") + name);
+      }
+      (input ? inputs_ : outputs_).emplace_back(name, element_size(type));
+    }
+  }
+
+  void run(AliceTrtInput const* inputs, size_t input_count,
+           AliceTrtOutput* outputs, size_t output_count, size_t steps,
+           AliceTrtCancelled cancelled, void* user_data) {
+    if (input_count != inputs_.size() || output_count != outputs_.size() ||
+        steps > 32 || !inputs || !outputs) {
+      fail("unexpected ABI-2 TensorRT graph interface");
+    }
+    check_cuda(cudaSetDevice(0), "cudaSetDevice");
+    auto& context = *graph_.context;
+    auto& engine = *graph_.engine;
+    auto const stream = stream_->get();
+    std::vector<Port*> provided_inputs;
+    std::vector<Port*> provided_outputs;
+    for (size_t index = 0; index < input_count; ++index) {
+      auto const& input = inputs[index];
+      Port& port = bind(provided_inputs, inputs_, input.name);
+      if (!input.data || input.rank == 0 || input.rank > 4) {
+        fail("invalid ABI-2 TensorRT input");
+      }
+      Dims shape{};
+      shape.nbDims = static_cast<int32_t>(input.rank);
+      std::copy_n(input.shape, input.rank, shape.d);
+      if (input.bytes % port.element_bytes != 0 ||
+          tensor_elements(shape, port.name.c_str()) != input.bytes / port.element_bytes) {
+        fail("ABI-2 TensorRT input size differs from its shape");
+      }
+      set_static_input_shape(graph_, port.name.c_str(), shape);
+      port.device.reserve(input.bytes);
+      set_address(context, port.name.c_str(), port.device.get());
+    }
+    for (size_t index = 0; index < output_count; ++index) {
+      auto& result = outputs[index];
+      Port& port = bind(provided_outputs, outputs_, result.name);
+      auto const shape = context.getTensorShape(port.name.c_str());
+      if (shape.nbDims <= 0 || shape.nbDims > 4) {
+        fail("invalid ABI-2 TensorRT output rank");
+      }
+      result.rank = static_cast<size_t>(shape.nbDims);
+      result.length = tensor_elements(shape, port.name.c_str());
+      std::copy_n(shape.d, result.rank, result.shape);
+      port.host.resize(result.length);
+      port.device.reserve(tensor_bytes(context, engine, port.name.c_str()));
+      set_address(context, port.name.c_str(), port.device.get());
+    }
+
+    // Keep Rust's input storage alive until every queued operation has drained,
+    // including on cancellation or an execution failure.
+    std::array<float, 32> times{};
+    for (size_t index = 0; index < steps; ++index) {
+      times[index] = static_cast<float>(index) / static_cast<float>(steps);
+    }
+    void* solver_output = nullptr;
+    try {
+      for (size_t index = 0; index < input_count; ++index) {
+        check_cuda(cudaMemcpyAsync(provided_inputs[index]->device.get(),
+                                   inputs[index].data, inputs[index].bytes,
+                                   cudaMemcpyHostToDevice, stream),
+                   "copy ABI-2 graph input");
+      }
+      if (steps == 0) {
+        check_trt(context.enqueueV3(stream), "enqueue ABI-2 graph");
+      } else {
+        solver_output = denoise(steps, times.data(), cancelled, user_data);
+      }
+      for (size_t index = 0; index < output_count; ++index) {
+        auto& port = *provided_outputs[index];
+        check_cuda(cudaMemcpyAsync(port.host.data(), solver_output ? solver_output : port.device.get(),
+                                   outputs[index].length * sizeof(float),
+                                   cudaMemcpyDeviceToHost, stream),
+                   "copy ABI-2 graph output");
+        outputs[index].data = port.host.data();
+      }
+      check_cuda(cudaStreamSynchronize(stream), "synchronize ABI-2 graph");
+    } catch (...) {
+      cudaStreamSynchronize(stream);
+      throw;
+    }
+  }
+
+ private:
+  struct Port {
+    Port(char const* id, size_t size) : name(id), element_bytes(size) {}
+    std::string name;
+    size_t element_bytes;
+    DeviceBuffer device;
+    std::vector<float> host;
+  };
+
+  static Port& find(std::vector<Port>& ports, char const* name) {
+    if (!name) fail("unnamed ABI-2 TensorRT graph binding");
+    for (auto& port : ports) if (port.name == name) return port;
+    fail(std::string("missing ABI-2 TensorRT binding ") + name);
+  }
+
+  static Port& bind(std::vector<Port*>& used, std::vector<Port>& ports,
+                    char const* name) {
+    Port& port = find(ports, name);
+    if (std::find(used.begin(), used.end(), &port) != used.end()) {
+      fail(std::string("duplicate ABI-2 TensorRT binding ") + name);
+    }
+    used.push_back(&port);
+    return port;
+  }
+
+  void* denoise(size_t steps, float const* times, AliceTrtCancelled cancelled,
+                void* user_data) {
+    auto& context = *graph_.context;
+    auto& engine = *graph_.engine;
+    auto const stream = stream_->get();
+    auto const state_shape = context.getTensorShape("state");
+    auto const next_shape = context.getTensorShape("state_next");
+    if (outputs_.size() != 1 || state_shape.nbDims != next_shape.nbDims ||
+        state_shape.nbDims <= 0 ||
+        !std::equal(state_shape.d, state_shape.d + state_shape.nbDims, next_shape.d) ||
+        tensor_bytes(context, engine, "time") != sizeof(float) ||
+        engine.getTensorDataType("state") != DataType::kFLOAT) {
+      fail("invalid ABI-2 TensorRT solver bindings");
+    }
+    void* state = find(inputs_, "state").device.get();
+    void* next = find(outputs_, "state_next").device.get();
+    void* time = find(inputs_, "time").device.get();
+    for (size_t index = 0; index < steps; ++index) {
+      if (cancelled && cancelled(user_data)) fail("ABI-2 TensorRT solver cancelled");
+      set_address(context, "state", state);
+      set_address(context, "state_next", next);
+      check_cuda(cudaMemcpyAsync(time, times + index, sizeof(float),
+                                 cudaMemcpyHostToDevice, stream),
+                 "copy ABI-2 solver time");
+      check_trt(context.enqueueV3(stream), "enqueue ABI-2 solver step");
+      std::swap(state, next);
+      // Bound the queued work so the caller can cancel between groups of steps.
+      if (index % 4 == 3 && index + 1 < steps) {
+        check_cuda(cudaStreamSynchronize(stream), "synchronize ABI-2 solver group");
+      }
+    }
+    return state;
+  }
+
+  EngineContext graph_;
+  std::unique_ptr<CudaStream> stream_;
+  std::vector<Port> inputs_;
+  std::vector<Port> outputs_;
 };
 
 void set_error(char* output, size_t capacity, std::string const& message) {
@@ -821,6 +1015,28 @@ void alice_trt_gpt_reset(void* handle) {
 
 void alice_trt_gpt_destroy(void* handle) {
   delete static_cast<GptRunner*>(handle);
+}
+
+void* alice_trt_graph_load(char const* plan, char* error, size_t error_capacity) {
+  GraphRunner* result = nullptr;
+  guard([&] { result = new GraphRunner(path_from_utf8(plan)); }, error, error_capacity);
+  return result;
+}
+
+int32_t alice_trt_graph_run(void* handle, AliceTrtInput const* inputs,
+                            size_t input_count, AliceTrtOutput* outputs,
+                            size_t output_count, size_t steps,
+                            AliceTrtCancelled cancelled, void* user_data,
+                            char* error, size_t error_capacity) {
+  return guard([&] {
+    if (!handle) fail("TensorRT graph handle is null");
+    static_cast<GraphRunner*>(handle)->run(inputs, input_count, outputs, output_count,
+                                          steps, cancelled, user_data);
+  }, error, error_capacity);
+}
+
+void alice_trt_graph_destroy(void* handle) {
+  delete static_cast<GraphRunner*>(handle);
 }
 
 }  // extern "C"

@@ -330,18 +330,17 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
                 .ok()
                 .as_deref()
                 == Some("1");
-        let cuda_provider = if enable_gpt_step_cuda_graph {
-            ort::ep::CUDA::default()
-                .with_tf32(false)
-                .with_cuda_graph(true)
-                .build()
-                .error_on_failure()
-        } else {
-            ort::ep::CUDA::default()
-                .with_tf32(false)
-                .build()
-                .error_on_failure()
-        };
+        let target_tuning = (name == "target_features")
+            .then(|| std::env::var("ALICE_NATIVE_TTS_DIFFUSION_CUDA_TARGET").unwrap_or_default());
+        let tf32 = matches!(target_tuning.as_deref(), Some("tf32" | "tf32_nc1d"));
+        let mut provider = ort::ep::CUDA::default().with_tf32(tf32);
+        if matches!(target_tuning.as_deref(), Some("nc1d" | "tf32_nc1d")) {
+            provider = provider.with_conv1d_pad_to_nc1d(true);
+        }
+        if enable_gpt_step_cuda_graph {
+            provider = provider.with_cuda_graph(true);
+        }
+        let cuda_provider = provider.build().error_on_failure();
         builder = builder
             .with_execution_providers([cuda_provider])
             .map_err(|e| invalid(e.to_string()))?;

@@ -7,6 +7,8 @@ use std::{
     ptr::NonNull,
 };
 
+pub(crate) mod graph;
+
 const TOPK_CAPACITY: usize = 256;
 const ERROR_CAPACITY: usize = 2048;
 
@@ -64,13 +66,25 @@ impl NativeTrtGpt {
     }
 
     pub(crate) fn load_graphs(encoder: &Path, step: &Path) -> Result<Self> {
+        Self::load_graphs_with_precision(encoder, step, "fp32")
+    }
+
+    pub(crate) fn load_fp16_graphs(dir: &Path) -> Result<Self> {
+        Self::load_graphs_with_precision(
+            &dir.join("gpt_encoder.onnx"),
+            &dir.join("gpt_step_active_len.onnx"),
+            "fp16-cache",
+        )
+    }
+
+    fn load_graphs_with_precision(encoder: &Path, step: &Path, precision: &str) -> Result<Self> {
         let cache_dir = engine_cache_dir()?;
         let encoder_plan = cache_dir.join(format!(
-            "gpt_encoder-{}-trt112-fp32.plan",
+            "gpt_encoder-{}-trt112-{precision}.plan",
             model_fingerprint(encoder)?
         ));
         let step_plan = cache_dir.join(format!(
-            "gpt_step-{}-trt112-fp32.plan",
+            "gpt_step-{}-trt112-{precision}.plan",
             model_fingerprint(step)?
         ));
         std::fs::create_dir_all(&cache_dir)?;

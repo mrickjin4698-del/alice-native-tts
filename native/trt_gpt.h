@@ -47,4 +47,31 @@ ALICE_TRT_EXPORT int32_t alice_trt_gpt_run_step(void* handle,
 ALICE_TRT_EXPORT void alice_trt_gpt_reset(void* handle);
 ALICE_TRT_EXPORT void alice_trt_gpt_destroy(void* handle);
 
+struct AliceTrtInput {
+  const char* name;
+  const void* data;
+  size_t bytes;
+  int64_t shape[4];
+  size_t rank;
+};
+
+struct AliceTrtOutput {
+  const char* name;
+  const float* data;
+  size_t length;
+  int64_t shape[4];
+  size_t rank;
+};
+
+typedef bool (*AliceTrtCancelled)(void* user_data);
+
+ALICE_TRT_EXPORT void* alice_trt_graph_load(const char* plan, char* error,
+                                           size_t error_capacity);
+ALICE_TRT_EXPORT int32_t alice_trt_graph_run(
+    void* handle, const AliceTrtInput* inputs, size_t input_count,
+    AliceTrtOutput* outputs, size_t output_count, size_t steps,
+    AliceTrtCancelled cancelled, void* user_data, char* error,
+    size_t error_capacity);
+ALICE_TRT_EXPORT void alice_trt_graph_destroy(void* handle);
+
 }

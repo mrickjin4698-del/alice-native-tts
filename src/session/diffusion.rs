@@ -1,5 +1,8 @@
 //! ABI-2 GPT-SoVITS diffusion graphs and native per-fragment scheduling.
 
+#[cfg(feature = "r2-trt-native")]
+mod trt;
+
 use super::ModelFamily;
 use crate::{
     check,
@@ -19,6 +22,7 @@ const MEL_CHANNELS: usize = 100;
 const BERT_CHANNELS: usize = 1024;
 const KV_CAPACITY: usize = 512;
 const EOS: i64 = 1024;
+const VOCODER_LOOKAHEAD_FRAMES: usize = 128;
 
 const FILES: &[&str] = &[
     "config.json",
@@ -52,6 +56,8 @@ pub(super) struct Pack {
     feature_channels: usize,
     speaker_channels: usize,
     rope_channels: usize,
+    #[cfg(feature = "r2-trt-native")]
+    gpt_checkpoint_sha256: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -182,11 +188,21 @@ impl Frames {
 
     fn from_output(value: &DynValue, channels: usize, max_frames: usize) -> Result<Self> {
         let (shape, values) = value.try_extract_tensor::<f32>()?;
-        let [1, rows, frames] = &shape[..] else {
+        Self::from_values(shape, values, channels, max_frames)
+    }
+
+    fn from_values(
+        shape: &[i64],
+        values: &[f32],
+        channels: usize,
+        max_frames: usize,
+    ) -> Result<Self> {
+        let [1, rows, frames] = shape else {
             return Err(invalid("expected a [1, channels, frames] acoustic output"));
         };
         if *rows != channels as i64
             || !(1..=max_frames as i64).contains(frames)
+            || values.len() != channels * *frames as usize
             || values.iter().any(|v| !v.is_finite())
         {
             return Err(invalid("invalid acoustic output dimensions or values"));
@@ -242,9 +258,23 @@ enum Gpt {
 }
 
 impl Gpt {
-    fn load(dir: &Path, backend: Backend) -> Result<Self> {
+    fn load(dir: &Path, backend: Backend, _pack: &Pack) -> Result<Self> {
         #[cfg(feature = "r2-trt-native")]
         if backend == Backend::TensorRtNative {
+            if let Some(path) = std::env::var_os("ALICE_NATIVE_TTS_DIFFUSION_GPT_FP16_DIR") {
+                let path = Path::new(&path);
+                let metadata: serde_json::Value =
+                    serde_json::from_slice(&fs::read(path.join("gpt.json"))?)?;
+                let digest = _pack.gpt_checkpoint_sha256.as_deref();
+                if digest.is_none() || metadata["gpt_checkpoint_sha256"].as_str() != digest {
+                    return Err(invalid(
+                        "FP16 GPT graphs target a different checkpoint than this pack",
+                    ));
+                }
+                return Ok(Self::TensorRt(
+                    crate::native_trt::NativeTrtGpt::load_fp16_graphs(path)?,
+                ));
+            }
             return Ok(Self::TensorRt(
                 crate::native_trt::NativeTrtGpt::load_graphs(
                     &dir.join("gpt_encoder.onnx"),
@@ -363,23 +393,43 @@ fn generate(
     Ok(tokens)
 }
 
-pub(super) struct Session {
-    frontend: Frontend,
-    gpt: Gpt,
+struct OrtAcoustics {
     target: OrtSession,
     condition: OrtSession,
     step: OrtSession,
     vocoder: OrtSession,
     host: MemoryInfo,
     device: MemoryInfo,
+    speaker: ort::value::Tensor<f32>,
+}
+
+enum Acoustics {
+    Ort(Box<OrtAcoustics>),
+    #[cfg(feature = "r2-trt-native")]
+    TensorRt(Box<trt::Acoustics>),
+}
+
+struct DenoiseWindow<'a> {
+    features: Frames,
+    prompt: Vec<f32>,
+    mask: Vec<f32>,
+    state: Vec<f32>,
+    rope: &'a [f32],
+    rope_channels: usize,
+}
+
+pub(super) struct Session {
+    frontend: Frontend,
+    gpt: Gpt,
+    acoustics: Acoustics,
     pack: Pack,
     schedule: Schedule,
     reference_features: Frames,
     reference_mel: Frames,
     reference_bert: Vec<f32>,
-    speaker: ort::value::Tensor<f32>,
     rope: Vec<f32>,
     profile: bool,
+    rolling_pcm: bool,
 }
 
 #[derive(Default, Serialize)]
@@ -406,28 +456,7 @@ impl Session {
         backend: Backend,
         cancel: &impl Fn() -> bool,
     ) -> Result<Self> {
-        let (acoustic, device) = match backend {
-            Backend::Cpu if pack.precision == Precision::Fp32 => {
-                (Backend::Cpu, AllocationDevice::CPU)
-            }
-            #[cfg(feature = "r1-cuda-ep")]
-            Backend::Cuda => (Backend::Cuda, AllocationDevice::CUDA),
-            #[cfg(all(feature = "r2-trt-native", feature = "r1-cuda-ep"))]
-            Backend::TensorRtNative => (Backend::Cuda, AllocationDevice::CUDA),
-            _ => {
-                return Err(invalid(
-                    "native diffusion requires CPU with an fp32 pack, or a CUDA-enabled build",
-                ))
-            }
-        };
         let schedule = Schedule::for_family(pack.family)?;
-        let host = MemoryInfo::new(
-            AllocationDevice::CPU,
-            0,
-            AllocatorType::Device,
-            MemoryType::Default,
-        )?;
-        let device = MemoryInfo::new(device, 0, AllocatorType::Device, MemoryType::Default)?;
         let reference_bert = read_f32(
             dir,
             "reference_bert.f32",
@@ -445,39 +474,29 @@ impl Session {
             MEL_CHANNELS,
             pack.reference_frames,
         )?;
-        let speaker = tf(
-            vec![1, pack.speaker_channels, 1],
-            read_f32(dir, "reference_speaker.f32", pack.speaker_channels)?,
-        )?;
+        let speaker = read_f32(dir, "reference_speaker.f32", pack.speaker_channels)?;
         let rope = read_f32(dir, "rope.f32", schedule.frame_budget * pack.rope_channels)?;
         check(cancel)?;
         let frontend = Frontend::load(dir, Backend::Cpu)?;
-        let gpt = Gpt::load(dir, backend)?;
+        let gpt = Gpt::load(dir, backend, &pack)?;
         check(cancel)?;
-        let target = open_on(dir, "target_features", acoustic)?;
-        let condition = open_on(dir, "dit_condition", acoustic)?;
-        let step = open_on(dir, "dit_step", acoustic)?;
-        check(cancel)?;
-        let vocoder = open_on(dir, "vocoder", acoustic)?;
+        let acoustics = Acoustics::load(dir, &pack, backend, speaker, cancel)?;
         check(cancel)?;
         let profile = std::env::var("ALICE_NATIVE_TTS_DIFFUSION_PROFILE").as_deref() == Ok("1");
+        let rolling_pcm =
+            std::env::var("ALICE_NATIVE_TTS_DIFFUSION_ROLLING_PCM").as_deref() == Ok("1");
         Ok(Self {
             frontend,
             gpt,
-            target,
-            condition,
-            step,
-            vocoder,
-            host,
-            device,
+            acoustics,
             pack,
             schedule,
             reference_features,
             reference_mel,
             reference_bert,
-            speaker,
             rope,
             profile,
+            rolling_pcm,
         })
     }
 
@@ -519,43 +538,21 @@ impl Session {
                     .synthesize(all_phones, bert, &self.pack.reference_codes, cancel)?;
             timings.gpt_ms += milliseconds(start);
             let start = Instant::now();
-            let features = {
-                let mut output = self.target.run(ort::inputs! {
-                    "codes" => ti(vec![1, 1, codes.len()], codes)?,
-                    "phones" => ti(vec![1, target], phones)?,
-                    "speaker" => &self.speaker,
-                })?;
-                Frames::from_output(
-                    &take(&mut output, "features")?,
-                    self.pack.feature_channels,
-                    4 * KV_CAPACITY,
-                )?
-            };
+            let features = self
+                .acoustics
+                .features(codes, phones, self.pack.feature_channels)?;
             timings.features_ms += milliseconds(start);
-            let mel = self.diffuse(&features, &mut seed, cancel, &mut timings)?;
+            let (mel, emitted) =
+                self.diffuse(&features, &mut seed, cancel, &mut timings, &mut emit)?;
             check(cancel)?;
             let start = Instant::now();
-            let mut output = self.vocoder.run(ort::inputs! {
-                "mel" => tf(vec![1, MEL_CHANNELS, mel.len], mel.values)?,
-            })?;
-            let audio = take(&mut output, "waveform")?;
-            let (shape, samples) = audio.try_extract_tensor::<f32>()?;
-            if shape[..] != [1, 1, (mel.len * self.schedule.samples_per_frame) as i64]
-                || samples.iter().any(|sample| !sample.is_finite())
-            {
-                return Err(invalid("invalid vocoder waveform"));
-            }
-            let peak = samples
-                .iter()
-                .fold(1.0f32, |peak, value| peak.max(value.abs()));
-            let mut normalized =
-                Vec::with_capacity(samples.len() + self.pack.sample_rate as usize * 3 / 10);
-            normalized.extend(samples.iter().map(|sample| sample / peak));
-            normalized.resize(samples.len() + self.pack.sample_rate as usize * 3 / 10, 0.0);
+            let samples = mel.len * self.schedule.samples_per_frame;
+            let silence = self.pack.sample_rate as usize * 3 / 10;
+            let normalized = self.acoustics.waveform(mel, samples, silence)?;
             timings.vocoder_ms += milliseconds(start);
             timings.fragments += 1;
             check(cancel)?;
-            emit(&normalized);
+            emit(&normalized[emitted..]);
         }
         if self.profile {
             eprintln!(
@@ -572,23 +569,44 @@ impl Session {
         seed: &mut u64,
         cancel: &impl Fn() -> bool,
         timings: &mut Timings,
-    ) -> Result<Frames> {
+        emit: &mut impl FnMut(&[f32]),
+    ) -> Result<(Frames, usize)> {
         let mut history = None::<(Frames, Frames)>;
         let reference_len = self.pack.reference_frames;
         let mut output = None::<Frames>;
+        let mut emitted = 0;
         let chunk_frames = self.schedule.target_frames(reference_len);
         for start in (0..target.len).step_by(chunk_frames) {
             check(cancel)?;
             let current = target.slice(start, (start + chunk_frames).min(target.len));
             let (features, mel) = self.prompt_for_chunk(history.as_ref(), &current);
             let generated = self.denoise(features, &mel, seed, cancel, timings)?;
+            if self.rolling_pcm
+                && start == 0
+                && target.len > chunk_frames
+                && generated.len > VOCODER_LOOKAHEAD_FRAMES
+            {
+                check(cancel)?;
+                let started = Instant::now();
+                let samples_per_frame = self.schedule.samples_per_frame;
+                let waveform = self.acoustics.waveform(
+                    generated.slice(0, generated.len),
+                    generated.len * samples_per_frame,
+                    0,
+                )?;
+                emitted = (generated.len - VOCODER_LOOKAHEAD_FRAMES) * samples_per_frame;
+                timings.vocoder_ms += milliseconds(started);
+                check(cancel)?;
+                emit(&waveform[..emitted]);
+            }
             history = Some((current.tail(reference_len), generated.tail(reference_len)));
             output = Some(match output {
                 Some(previous) => previous.append(&generated),
                 None => generated,
             });
         }
-        output.ok_or_else(|| invalid("diffusion returned no mel frames"))
+        let mel = output.ok_or_else(|| invalid("diffusion returned no mel frames"))?;
+        Ok((mel, emitted))
     }
 
     fn prompt_for_chunk(
@@ -641,30 +659,185 @@ impl Session {
         {
             output[..prompt.len].copy_from_slice(input);
         }
+        timings.conditioning_ms += milliseconds(started);
+        let started = Instant::now();
+        let mut mask = vec![1f32; frames];
+        mask[..prompt.len].fill(0.0);
+        let window = DenoiseWindow {
+            features,
+            prompt: padded,
+            mask,
+            state: noise(seed, frames, prompt.len, self.schedule.temperature),
+            rope: &self.rope[..frames * self.pack.rope_channels],
+            rope_channels: self.pack.rope_channels,
+        };
+        timings.denoise_ms += milliseconds(started);
+        let result = self
+            .acoustics
+            .denoise(window, self.schedule, cancel, timings)?;
+        timings.chunks += 1;
+        timings.denoise_steps += self.schedule.steps;
+        if result.len != frames {
+            return Err(invalid("diffusion step changed the frame count"));
+        }
+        Ok(result.slice(prompt.len, frames))
+    }
+}
+
+impl Acoustics {
+    fn load(
+        dir: &Path,
+        pack: &Pack,
+        backend: Backend,
+        speaker: Vec<f32>,
+        cancel: &impl Fn() -> bool,
+    ) -> Result<Self> {
+        #[cfg(feature = "r2-trt-native")]
+        if backend == Backend::TensorRtNative {
+            if let Some(root) = std::env::var_os("ALICE_NATIVE_TTS_DIFFUSION_TRT_ROOT") {
+                return Ok(Self::TensorRt(Box::new(trt::Acoustics::load(
+                    dir,
+                    Path::new(&root),
+                    pack,
+                    speaker,
+                    cancel,
+                )?)));
+            }
+        }
+        let (backend, device) = match backend {
+            Backend::Cpu if pack.precision == Precision::Fp32 => {
+                (Backend::Cpu, AllocationDevice::CPU)
+            }
+            #[cfg(feature = "r1-cuda-ep")]
+            Backend::Cuda => (Backend::Cuda, AllocationDevice::CUDA),
+            #[cfg(all(feature = "r2-trt-native", feature = "r1-cuda-ep"))]
+            Backend::TensorRtNative => (Backend::Cuda, AllocationDevice::CUDA),
+            _ => {
+                return Err(invalid(
+                    "native diffusion requires CPU with an fp32 pack, or a CUDA-enabled build",
+                ))
+            }
+        };
+        let target = open_on(dir, "target_features", backend)?;
+        let condition = open_on(dir, "dit_condition", backend)?;
+        let step = open_on(dir, "dit_step", backend)?;
+        check(cancel)?;
+        let vocoder = open_on(dir, "vocoder", backend)?;
+        Ok(Self::Ort(Box::new(OrtAcoustics {
+            target,
+            condition,
+            step,
+            vocoder,
+            host: MemoryInfo::new(
+                AllocationDevice::CPU,
+                0,
+                AllocatorType::Device,
+                MemoryType::Default,
+            )?,
+            device: MemoryInfo::new(device, 0, AllocatorType::Device, MemoryType::Default)?,
+            speaker: tf(vec![1, speaker.len(), 1], speaker)?,
+        })))
+    }
+
+    fn features(&mut self, codes: Vec<i64>, phones: Vec<i64>, channels: usize) -> Result<Frames> {
+        match self {
+            Self::Ort(ort) => ort_features(&mut ort.target, &ort.speaker, codes, phones, channels),
+            #[cfg(feature = "r2-trt-native")]
+            Self::TensorRt(native) => native.features(codes, phones, channels),
+        }
+    }
+
+    fn waveform(&mut self, mel: Frames, samples: usize, silence: usize) -> Result<Vec<f32>> {
+        match self {
+            Self::Ort(ort) => {
+                let mut output = ort.vocoder.run(ort::inputs! {
+                    "mel" => tf(vec![1, MEL_CHANNELS, mel.len], mel.values)?,
+                })?;
+                let audio = take(&mut output, "waveform")?;
+                let (shape, data) = audio.try_extract_tensor::<f32>()?;
+                normalize_waveform(shape, data, samples, silence)
+            }
+            #[cfg(feature = "r2-trt-native")]
+            Self::TensorRt(native) => native.waveform(&mel, samples, silence),
+        }
+    }
+
+    fn denoise(
+        &mut self,
+        window: DenoiseWindow<'_>,
+        schedule: Schedule,
+        cancel: &impl Fn() -> bool,
+        timings: &mut Timings,
+    ) -> Result<Frames> {
+        match self {
+            Self::Ort(ort) => ort.denoise(window, schedule, cancel, timings),
+            #[cfg(feature = "r2-trt-native")]
+            Self::TensorRt(native) => native.denoise(window, schedule, cancel, timings),
+        }
+    }
+}
+
+fn ort_features(
+    target: &mut OrtSession,
+    speaker: &ort::value::Tensor<f32>,
+    codes: Vec<i64>,
+    phones: Vec<i64>,
+    channels: usize,
+) -> Result<Frames> {
+    let mut output = target.run(ort::inputs! {
+        "codes" => ti(vec![1, 1, codes.len()], codes)?,
+        "phones" => ti(vec![1, phones.len()], phones)?,
+        "speaker" => speaker,
+    })?;
+    Frames::from_output(&take(&mut output, "features")?, channels, 4 * KV_CAPACITY)
+}
+
+fn normalize_waveform(
+    shape: &[i64],
+    data: &[f32],
+    samples: usize,
+    silence: usize,
+) -> Result<Vec<f32>> {
+    if shape != [1, 1, samples as i64]
+        || data.len() != samples
+        || data.iter().any(|sample| !sample.is_finite())
+    {
+        return Err(invalid("invalid vocoder waveform"));
+    }
+    let peak = data
+        .iter()
+        .fold(1.0f32, |peak, value| peak.max(value.abs()));
+    let mut normalized = Vec::with_capacity(samples + silence);
+    normalized.extend(data.iter().map(|sample| sample / peak));
+    normalized.resize(samples + silence, 0.0);
+    Ok(normalized)
+}
+
+impl OrtAcoustics {
+    fn denoise(
+        &mut self,
+        window: DenoiseWindow<'_>,
+        schedule: Schedule,
+        cancel: &impl Fn() -> bool,
+        timings: &mut Timings,
+    ) -> Result<Frames> {
+        let started = Instant::now();
+        let frames = window.features.len;
         let mut conditions = self.condition.run(ort::inputs! {
-            "features" => tf(vec![1, features.channels, frames], features.values)?,
-            "prompt" => tf(vec![1, MEL_CHANNELS, frames], padded)?,
+            "features" => tf(vec![1, window.features.channels, frames], window.features.values)?,
+            "prompt" => tf(vec![1, MEL_CHANNELS, frames], window.prompt)?,
         })?;
         let condition = take(&mut conditions, "condition")?;
-        let negative = if self.schedule.cfg {
+        let negative = if schedule.cfg {
             Some(take(&mut conditions, "negative")?)
         } else {
             None
         };
         timings.conditioning_ms += milliseconds(started);
         let started = Instant::now();
-        let mut mask = vec![1f32; frames];
-        mask[..prompt.len].fill(0.0);
-        let mask = tf(vec![1, 1, frames], mask)?;
-        let rope = tf(
-            vec![1, frames, self.pack.rope_channels],
-            self.rope[..frames * self.pack.rope_channels].to_vec(),
-        )?;
-        let mut state = tf(
-            vec![1, MEL_CHANNELS, frames],
-            noise(seed, frames, prompt.len, self.schedule.temperature),
-        )?
-        .into_dyn();
+        let mask = tf(vec![1, 1, frames], window.mask)?;
+        let rope = tf(vec![1, frames, window.rope_channels], window.rope.to_vec())?;
+        let mut state = tf(vec![1, MEL_CHANNELS, frames], window.state)?.into_dyn();
         let mut binding = self.step.create_binding()?;
         binding.bind_input("generation_mask", &mask)?;
         binding.bind_input("rope", &rope)?;
@@ -673,10 +846,10 @@ impl Session {
             binding.bind_input("negative", negative)?;
         }
         binding.bind_output_to_device("state_next", &self.device)?;
-        for index in 0..self.schedule.steps {
+        for index in 0..schedule.steps {
             check(cancel)?;
-            let time = tf(vec![1], vec![index as f32 / self.schedule.steps as f32])?;
-            if index + 1 == self.schedule.steps {
+            let time = tf(vec![1], vec![index as f32 / schedule.steps as f32])?;
+            if index + 1 == schedule.steps {
                 binding.clear_outputs();
                 binding.bind_output_to_device("state_next", &self.host)?;
             }
@@ -685,14 +858,8 @@ impl Session {
             let mut output = self.step.run_binding(&binding)?;
             state = take(&mut output, "state_next")?;
         }
-        timings.chunks += 1;
-        timings.denoise_steps += self.schedule.steps;
         timings.denoise_ms += milliseconds(started);
-        let result = Frames::from_output(&state, MEL_CHANNELS, frames)?;
-        if result.len != frames {
-            return Err(invalid("diffusion step changed the frame count"));
-        }
-        Ok(result.slice(prompt.len, frames))
+        Frames::from_output(&state, MEL_CHANNELS, frames)
     }
 }
 

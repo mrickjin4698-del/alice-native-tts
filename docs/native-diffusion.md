@@ -63,3 +63,4 @@ JSONL 握手中的 `streaming` 为 `text_fragments`，`default_language` 为
 
 复现真实 PCM 的方法见[调度测试](performance-native-diffusion-scheduling.md)。
 首段延迟、整段时间、RTF 及 PCM 对比见[同权重 checkpoint 对比](performance-native-diffusion.md)。
+可选的 TensorRT 11 声学 plan、混合精度 GPT 和后续实验见[原生 TensorRT 性能实验](performance-native-diffusion-tensorrt.md)。
