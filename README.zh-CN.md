@@ -4,7 +4,7 @@
 
 ## 项目介绍
 
-Alice Native TTS 是本地 GPT-SoVITS 推理库和独立命令行工具。可以用
+Alice Native TTS 是支持 GPT-SoVITS 和 Irodori-TTS 的本地推理库和独立命令行工具。可以用
 `alice-tts` 生成 WAV，也可以启动常驻 JSONL worker，边合成边接收 PCM。
 Rust 应用可通过会话接口直接接收音频。请求支持取消，取消后可以继续使用会话。
 
@@ -13,6 +13,7 @@ Rust 应用可通过会话接口直接接收音频。请求支持取消，取消
 | ABI-1 原生 ONNX 包 | v2Pro，含兼容的 v2ProPlus 权重导出 | 32 kHz PCM，有匹配的流式图时按语义 token 分块 |
 | ABI-2 原生 ONNX 包 | v3、v4、V5 Turbo、V5 Dev | v3 为 24 kHz，其余为 48 kHz，按文本片段交付，V5 可开启提前出声 |
 | Checkpoint 清单 | v1、v2、v2Pro、v2ProPlus、v3、v4、V5 Turbo、V5 Dev | 调用本机 GPT-SoVITS Python 运行时，采样率和流式方式随模型家族而定 |
+| Irodori checkpoint 清单 | Irodori-TTS v4.1 Small | 日语合成，使用常驻本地 Python worker 按整句交付 PCM |
 
 原生包由 Rust 和所选推理库执行。原生文本前端支持中文和英文，处理常见的
 数字、日期、时间和金额格式。模型文件、参考音频及转写由使用者提供。
@@ -23,6 +24,19 @@ Rust 应用可通过会话接口直接接收音频。请求支持取消，取消
 单请求热态测量。**首包**从提交请求计到收到首个 PCM 块。**整句**计到
 `done`。**RTF** 为整句耗时除以实际返回的音频时长。计时排除模型加载、
 引擎构建和设备播放。
+
+### Irodori-TTS v4.1 Small · 2026-11-25
+
+RTX 5070 Ti 上每组测试 12 次热态请求，使用同一句日语、同一种子、
+TensorRT FP16 去噪引擎和 40 步采样。两组均输出 5.04 秒的整句 PCM。
+
+| 音频路径 | 首包 PCM | 整句完成 | RTF |
+|---|---:|---:|---:|
+| 原 RF 调度与 PyTorch DACVAE | 271.9 ms | 271.9 ms | 0.054 |
+| 时间步复用、批量尾裁与 TensorRT DACVAE | **218.5 ms** | **218.5 ms** | **0.043** |
+
+参考音频用例从 308.4 ms 降至 259.2 ms。四组用例的样本数和本地 Whisper 转写一致，相对 PCM RMS
+误差为 0.22% 到 0.39%。[TensorRT 配置与构建](docs/standalone.md#irodori-tts-tensorrt-去噪与解码)
 
 ### V5 语义首窗 · 2026-11-25
 
@@ -146,6 +160,7 @@ cargo build --locked --release --bin alice-tts
 - **准备 ABI-1**。使用兼容的导出文件与 GPT-SoVITS 安装生成模型包。[准备脚本](tools/prepare-native-tts-pack.py) · [流式图导出](tools/export-native-tts-stream.py)
 - **导出 ABI-2**。提供本地 v3–V5 checkpoint、参考 WAV 和同权重 GPT 图。CPU 用 FP32，CUDA/TensorRT 可用 FP16。[原生扩散指南](docs/native-diffusion.md)
 - **直接使用 checkpoint**。在清单里填写模型家族、权重路径、参考 WAV 和转写，再由命令行启动对应的本机运行时。[清单与依赖配置](docs/standalone.md#gpt-sovits-checkpoint)
+- **运行 Irodori-TTS**。使用 v4.1 Small 权重和配套 DACVAE，可选参考 WAV 与风格描述。[Irodori-TTS 配置](docs/standalone.md#irodori-tts)
 
 参考、文本及生成 token 共用原生 GPT 的 512 个缓存位置。合成长文时，按段
 提交文本。

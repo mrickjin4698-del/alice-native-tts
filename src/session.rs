@@ -2,6 +2,8 @@
 
 mod checkpoint;
 mod diffusion;
+mod irodori;
+mod python_worker;
 
 use crate::{validate_pack, validate_streaming_pack, Backend, Config, Error, NativeTts, Pack};
 use serde::{Deserialize, Serialize};
@@ -55,6 +57,8 @@ pub enum ModelFamily {
     V5Turbo,
     #[serde(rename = "v5dev")]
     V5Dev,
+    #[serde(rename = "irodori")]
+    Irodori,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -62,6 +66,8 @@ pub enum ModelFamily {
 pub enum Runtime {
     NativeOnnx,
     GptSovitsCheckpoint,
+    IrodoriTts,
+    IrodoriTensorRt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -116,6 +122,11 @@ struct CheckpointManifest {
     hubert: Option<PathBuf>,
 }
 
+#[derive(Deserialize)]
+struct ManifestFamily {
+    family: ModelFamily,
+}
+
 fn automatic_language() -> String {
     "auto".into()
 }
@@ -144,9 +155,10 @@ enum ModelSource {
     Native(PathBuf),
     Diffusion(PathBuf, Box<diffusion::Pack>),
     Checkpoint(Box<CheckpointManifest>),
+    Irodori(Box<irodori::Manifest>),
 }
 
-/// A validated native pack directory or a schema-versioned checkpoint manifest.
+/// A validated native pack directory or a schema-versioned model manifest.
 pub struct Model {
     source: ModelSource,
     info: ModelInfo,
@@ -195,7 +207,16 @@ impl Model {
         let parent = path
             .parent()
             .ok_or_else(|| invalid("model manifest has no parent"))?;
-        let mut manifest: CheckpointManifest = serde_json::from_slice(&fs::read(&path)?)?;
+        let source = fs::read(&path)?;
+        let header: ManifestFamily = serde_json::from_slice(&source)?;
+        if header.family == ModelFamily::Irodori {
+            let manifest = irodori::Manifest::open(parent, &source)?;
+            return Ok(Self {
+                info: manifest.info(),
+                source: ModelSource::Irodori(Box::new(manifest)),
+            });
+        }
+        let mut manifest: CheckpointManifest = serde_json::from_slice(&source)?;
         if manifest.schema_version != 1 {
             return Err(invalid("unsupported checkpoint manifest schema_version"));
         }
@@ -245,7 +266,7 @@ impl Model {
 enum Engine {
     Native(Box<NativeTts>),
     Diffusion(Box<diffusion::Session>),
-    Checkpoint(Box<checkpoint::Session>),
+    Python(Box<python_worker::Session>),
 }
 
 fn native_backend(device: Device) -> SessionResult<Backend> {
@@ -288,12 +309,16 @@ impl Session {
                     .map_err(native_error)?,
             )),
             ModelSource::Checkpoint(manifest) => {
-                let session = checkpoint::Session::load(*manifest, options, cancelled)?;
-                info.sample_rate = Some(session.sample_rate());
-                info.languages = session.languages().to_vec();
-                Engine::Checkpoint(Box::new(session))
+                Engine::Python(Box::new(checkpoint::load(*manifest, options, cancelled)?))
+            }
+            ModelSource::Irodori(manifest) => {
+                Engine::Python(Box::new(manifest.load(options, cancelled)?))
             }
         };
+        if let Engine::Python(session) = &engine {
+            info.sample_rate = Some(session.sample_rate());
+            info.languages = session.languages().to_vec();
+        }
         Ok(Self { engine, info })
     }
 
@@ -325,7 +350,7 @@ impl Session {
                 )));
             }
         }
-        if let Engine::Checkpoint(session) = &mut self.engine {
+        if let Engine::Python(session) = &mut self.engine {
             return session.synthesize(text, language, cancelled, emit);
         }
         let mut samples = 0;
@@ -357,7 +382,7 @@ impl Session {
                 .map(|_| ()),
             Engine::Native(native) => native.synthesize(text, &stop).map(|audio| forward(&audio)),
             Engine::Diffusion(session) => session.synthesize(text, &stop, forward),
-            Engine::Checkpoint(_) => unreachable!("checkpoint synthesis returns above"),
+            Engine::Python(_) => unreachable!("Python synthesis returns above"),
         };
         if let Some(error) = error {
             return Err(error);
@@ -375,5 +400,42 @@ fn native_error(error: Error) -> SessionError {
     match error {
         Error::Cancelled => SessionError::Cancelled,
         error => error.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn inspect_irodori_manifest_reports_the_selected_inference_runtime() {
+        let fixture = tempfile::tempdir().unwrap();
+        let dir = fixture.path();
+        fs::create_dir_all(dir.join("runtime/irodori_tts")).unwrap();
+        fs::write(dir.join("runtime/irodori_tts/inference_runtime.py"), []).unwrap();
+        fs::write(dir.join("model.safetensors"), []).unwrap();
+        let path = dir.join("irodori.json");
+        let mut manifest = json!({
+            "schema_version": 1,
+            "family": "irodori",
+            "runtime_root": "runtime",
+            "checkpoint": "model.safetensors",
+        });
+        fs::write(&path, manifest.to_string()).unwrap();
+        let model = Model::open(&path).unwrap();
+        assert_eq!(model.info().runtime, Runtime::IrodoriTts);
+        assert_eq!(model.info().family, ModelFamily::Irodori);
+        assert_eq!(model.info().streaming, Streaming::Utterance);
+        assert_eq!(model.info().languages, ["ja", "auto"]);
+
+        manifest["denoiser_plan"] = json!("denoiser.plan");
+        fs::write(&path, manifest.to_string()).unwrap();
+        fs::write(dir.join("denoiser.plan"), []).unwrap();
+        assert!(Model::open(&path).is_err());
+        fs::write(dir.join("denoiser.json"), []).unwrap();
+        let model = Model::open(&path).unwrap();
+        assert_eq!(model.info().runtime, Runtime::IrodoriTensorRt);
+        assert_eq!(model.info().streaming, Streaming::Utterance);
     }
 }

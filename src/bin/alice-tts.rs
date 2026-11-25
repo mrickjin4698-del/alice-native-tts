@@ -15,11 +15,11 @@ alice-tts inspect MODEL
 alice-tts synthesize MODEL --text TEXT --output FILE.wav [--language LANG] [RUNTIME OPTIONS]
 alice-tts worker MODEL [--warmup-text TEXT] [RUNTIME OPTIONS]
 
-MODEL is a native ONNX pack directory or a checkpoint manifest JSON file.
+MODEL is a native ONNX pack directory or a model manifest JSON file.
 RUNTIME OPTIONS
   --device cpu|cuda|directml|tensor_rt|tensor_rt_native   Default cpu
   --gpt-sovits-root DIR   Local GPT-SoVITS installation for checkpoints
-  --python PATH          Interpreter for that installation
+  --python PATH          Interpreter for the local Python backend
 ";
 
 fn invalid(message: impl Into<String>) -> SessionError {

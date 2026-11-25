@@ -16,6 +16,7 @@ Windows x64 运行包解压后可直接运行。系统需要 DirectML 和 Micros
 | GPT-SoVITS v1、v2、v2Pro、v2ProPlus checkpoint | 本机 GPT-SoVITS Python 子进程 | 分 token 块输出 |
 | GPT-SoVITS v3、v4 checkpoint | 本机 GPT-SoVITS Python 子进程 | 按文本片段输出 |
 | GPT-SoVITS V5 Turbo、V5 Dev checkpoint | 支持 V5 的本机 GPT-SoVITS Python 子进程 | 按文本片段输出 48 kHz PCM |
+| Irodori-TTS v4.1 Small checkpoint | 本机 Irodori-TTS Python 子进程，支持 CPU 和 CUDA | 整句日语 PCM |
 
 ## 原生 ONNX 模型
 
@@ -81,6 +82,96 @@ alice-tts synthesize ./voice-v5dev.json --gpt-sovits-root 'D:/GPT-SoVITS-V5' --d
 两种 V5 模型均输出 48 kHz PCM，按上游的文本片段接口交付音频。Turbo 使用上游的 4 步采样默认值，Dev 使用 32 步采样默认值。运行时加载后会核对清单里的家族与实际权重。
 
 
+## Irodori-TTS
+
+在本机准备 Irodori-TTS 源码和依赖。下面按上游的 Windows CUDA 安装方式配置
+本次使用的源码版本。CPU 环境将 `--extra cu128` 改为 `--extra cpu`。
+[上游安装说明](https://github.com/Aratako/Irodori-TTS/blob/f01c08cd40c0afa62a862439a5de12f6dcf62054/README.md)
+
+```powershell
+git clone https://github.com/Aratako/Irodori-TTS.git
+git -C ./Irodori-TTS checkout f01c08cd40c0afa62a862439a5de12f6dcf62054
+uv sync --project ./Irodori-TTS --python 3.11 --extra cu128
+```
+
+下载 checkpoint 和 codec 权重，在 `irodori.json` 中填写路径。将模型仓库的
+`tokenizer/` 一并放在 `model.safetensors` 旁边。相对路径以清单所在目录为准。
+省略 `codec_weights` 时由上游使用默认的 DACVAE Hub 模型。首次启动还会缓存上游
+的 SilentCipher 音频水印权重。
+[v4.1 Small 权重](https://huggingface.co/Aratako/Irodori-TTS-v4.1-Small) ·
+[日语 DACVAE 权重](https://huggingface.co/Aratako/Semantic-DACVAE-Japanese-32dim)
+
+```json
+{
+  "schema_version": 1,
+  "family": "irodori",
+  "runtime_root": "./Irodori-TTS",
+  "checkpoint": "./irodori-model/model.safetensors",
+  "codec_weights": "./irodori-codec/weights.pth",
+  "caption": "落ち着いた自然な声",
+  "seed": 1234
+}
+```
+
+风格描述 `caption` 和随机种子 `seed` 都可省略。可添加
+`"reference_audio": "./reference.wav"` 使用本机参考音频，也可同时提供参考与
+风格描述。程序优先使用 `runtime_root` 中的 `.venv`，可用 `--python` 指定
+其他已配置的解释器。
+
+```powershell
+alice-tts inspect ./irodori.json
+alice-tts synthesize ./irodori.json --device cuda --language ja --text 'こんにちは。今日は音声合成のテストです。' --output ./irodori.wav
+alice-tts worker ./irodori.json --device cuda
+```
+
+worker 复用已加载的推理模型，`ready.model.streaming` 为 `utterance`。每次
+合成返回一个单声道 PCM16 音频块，采样率由 codec 决定。支持 `ja` 和
+`auto`。取消会结束本次 Python 子进程，下一次请求重新加载运行时。
+
+### Irodori-TTS TensorRT 去噪与解码
+
+可为 CUDA 清单添加 `"denoiser_plan": "./irodori-fp16.plan"`。它使用 TensorRT
+执行 RF-DiT 前向，沿用官方时长预测、40 步采样、CFG、DACVAE 和 SilentCipher。
+时长预测和采样复用同一次条件编码，常驻 worker 还可复用相同风格描述的编码。
+有效条件的 K/V 在每次合成中打包复用。超出引擎形状范围的步骤走 PyTorch，
+并在 stderr 记录回退。输出仍为整句 PCM。FP16 与 FP32 的引擎都可能产生
+浮点舍入差异。
+
+在目标 GPU 上用与运行时匹配的 TensorRT SDK 构建引擎。安装 SDK 对应的 Python
+wheel，并将 SDK 与 CUDA 依赖的 DLL 目录加入 PATH。本机验证使用 TensorRT
+11.2.1.2。导出时将 ONNX 依赖安装到单独目录，供导出命令通过 `PYTHONPATH`
+加载，以保留 Irodori 音频依赖所需的 protobuf 版本。
+
+```powershell
+$exportDeps = Join-Path (Get-Location) 'irodori-export-deps'
+python -m pip install --target $exportDeps onnx onnxscript
+$previousPythonPath = $env:PYTHONPATH
+$env:PYTHONPATH = $exportDeps
+python tools/prepare-irodori-tensorrt.py --runtime-root ./Irodori-TTS --checkpoint ./irodori-model/model.safetensors --trtexec ./TensorRT/bin/trtexec.exe --output ./irodori-fp16.plan --precision fp16
+$env:PYTHONPATH = $previousPythonPath
+```
+
+上面的 `python` 使用 Irodori 环境中的解释器。生成的 `.plan` 与同名 `.json`
+需放在一起，并使用导出时的 checkpoint。选择 `--precision fp32` 会构建禁用
+TF32 的 FP32 引擎。设置 `ALICE_IRODORI_PROFILE=1` 可查看阶段耗时及两种后端
+各自执行的步数。
+
+要用 TensorRT 解码，在同一 CUDA 清单加入 `"decoder_plan": "./dacvae-decoder.plan"`，
+并提供构建该引擎的本地 `codec_weights`。去噪和解码均使用 TensorRT 时，RF
+采样复用 GPU 上的时间步与步长，并批量检查尾部裁剪窗口。参考音频编码和
+SilentCipher 水印使用官方实现。
+
+```powershell
+$env:PYTHONPATH = $exportDeps
+python tools/prepare-irodori-codec.py --runtime-root ./Irodori-TTS --codec-weights ./irodori-codec/weights.pth --trtexec ./TensorRT/bin/trtexec.exe --output ./dacvae-decoder.plan
+$env:PYTHONPATH = $previousPythonPath
+```
+
+解码引擎构建时会执行多个帧长度的实机测试，成功后写入 `.plan` 与同名
+`.json`。本地显存较紧时可用 `--max-latent-frames` 缩小 profile，超出
+解码 profile 的输入会由 PyTorch 解码。分项日志的 `codec_backend` 字段
+记录实际使用的后端。
+
 ## JSONL 协议
 
 在 stdin 发送 UTF-8 JSON，每行一个对象。stdout 只输出 JSONL，运行日志走 stderr。模型加载成功且可选预热完成后，程序发送 `ready`。`ready` 包含 `protocol_version`、`device`、`pcm_format`、`channels` 和 `model`。
@@ -91,10 +182,10 @@ alice-tts synthesize ./voice-v5dev.json --gpt-sovits-root 'D:/GPT-SoVITS-V5' --d
 {"op":"shutdown"}
 ```
 
-- `synthesize` 接受一个非空 `request_id` 和 `text`。checkpoint 支持可选 `language`，原生模型按文本自动识别语言。
+- `synthesize` 接受一个非空 `request_id` 和 `text`。本地 Python 后端接受可选 `language`，原生模型按文本自动识别语言。
 - `audio` 包含 `request_id`、`sample_rate` 和 `pcm`。`pcm` 是 Base64 编码的单声道小端 PCM16 样本。
 - 每个已接受的请求以一个 `done`、`cancelled` 或 `error` 结束。`done.samples` 为总样本数。繁忙时新请求收到 `rejected`。
-- `cancel` 针对当前 `request_id`。checkpoint 模式释放该请求的兼容子进程，并在下一次合成时重新加载模型。原生模式在推理边界响应取消。
+- `cancel` 针对当前 `request_id`。本地 Python 后端结束子进程，并在下一次合成时重新加载模型。原生模式在推理边界响应取消。
 - stdin 到达 EOF 时，程序会处理完已接收的请求。`shutdown` 取消仍在进行的请求。
 
 Rust 调用方使用 `alice_native_tts::session::{Model, Session, SessionOptions}`。读取 `Session::info()` 获取采样率，再由 `Session::synthesize()` 接收 `&[i16]`。回调里的样本属于当前调用。

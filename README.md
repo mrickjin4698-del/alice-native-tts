@@ -4,7 +4,7 @@
 
 ## Overview
 
-Alice Native TTS runs GPT-SoVITS locally as a Rust library and a standalone
+Alice Native TTS runs GPT-SoVITS and Irodori-TTS locally as a Rust library and a standalone
 `alice-tts` executable. It can write a WAV, stream PCM from a persistent JSONL
 worker, or deliver PCM chunks directly to a Rust application. A caller can
 cancel a request and reuse the session.
@@ -14,6 +14,7 @@ cancel a request and reuse the session.
 | Native ONNX pack, ABI-1 | v2Pro, including compatible v2ProPlus weight exports | 32 kHz PCM. Semantic-token streaming with a matching streaming graph |
 | Native ONNX pack, ABI-2 | v3, v4, V5 Turbo, V5 Dev | Text fragments at 24 kHz for v3 and 48 kHz for the others. Optional early PCM for V5 |
 | Checkpoint manifest | v1, v2, v2Pro, v2ProPlus, v3, v4, V5 Turbo, V5 Dev | Uses a local GPT-SoVITS Python runtime. The model family determines the sample rate and streaming mode |
+| Irodori checkpoint manifest | Irodori-TTS v4.1 Small | Japanese synthesis. One PCM chunk per utterance from a persistent local Python worker |
 
 Native packs use Rust and the selected inference libraries at runtime. The
 native frontend handles Mandarin and English, including common number, date,
@@ -28,6 +29,21 @@ the delay from request submission to the first audio chunk. **Completion** is
 the delay to the `done` event. **RTF** is completion time divided by the duration
 of the returned audio. Timings exclude model loading, engine builds and
 device playback.
+
+### Irodori-TTS v4.1 Small · November 25, 2026
+
+RTX 5070 Ti, 12 warm requests per mode, same Japanese text, seed, FP16
+TensorRT denoiser and 40 sampling steps. Both paths deliver a single
+5.04 s PCM chunk.
+
+| Waveform path | First PCM | Completion | RTF |
+|---|---:|---:|---:|
+| PyTorch DACVAE with the original RF schedule | 271.9 ms | 271.9 ms | 0.054 |
+| TensorRT DACVAE with cached timesteps and batched tail detection | **218.5 ms** | **218.5 ms** | **0.043** |
+
+The reference-audio case completed in 259.2 ms, down from 308.4 ms. All four
+cases kept their sample counts and local Whisper transcripts, with 0.22% to
+0.39% relative PCM RMS error. [Irodori TensorRT setup](docs/standalone.md#irodori-tts-tensorrt-去噪与解码)
 
 ### V5 semantic-prefix streaming · November 25, 2026
 
@@ -155,14 +171,15 @@ You can also install `alice-tts` on your path with
 
 ### Model packs
 
-Choose a pack directory for native inference or a JSON manifest for an existing
-GPT-SoVITS installation. A native pack contains `pack.json`, ONNX graphs,
+Choose a pack directory for native inference or a JSON manifest for a local
+checkpoint runtime. A native pack contains `pack.json`, ONNX graphs,
 frontend assets and reference data. ABI-1 token streaming adds a validated
 `sovits_stream.onnx` and streaming metadata.
 
 - **Prepare ABI-1** from compatible exports with [prepare-native-tts-pack.py](tools/prepare-native-tts-pack.py). Add a token-streaming graph with [export-native-tts-stream.py](tools/export-native-tts-stream.py).
 - **Export ABI-2** from local v3–V5 checkpoints, the reference WAV and a matching GPT graph set. Choose FP32 for CPU or FP16 for the CUDA/TensorRT setup. [Native diffusion guide](docs/native-diffusion.md)
 - **Use checkpoints directly** by putting the family, weight paths, reference WAV and transcript in a manifest. The CLI starts the matching local GPT-SoVITS runtime. [Manifest and dependency setup](docs/standalone.md#gpt-sovits-checkpoint)
+- **Run Irodori-TTS** with a v4.1 Small checkpoint and its DACVAE codec. Supply a reference WAV or style caption when needed. [Irodori-TTS setup](docs/standalone.md#irodori-tts)
 
 The native GPT cache has 512 positions shared by the reference, input text
 and generated tokens. Split long input into shorter passages when using a
