@@ -1,173 +1,230 @@
 # Alice Native TTS
 
-[English](README.md)
+[English](README.md) · [项目介绍](#项目介绍) · [性能基准](#性能基准) · [使用指南](#使用指南)
 
-面向应用和命令行的本地 GPT-SoVITS 推理项目。Rust 原生引擎运行 v2Pro ABI-1
-及 v3、v4、V5 Turbo、V5 Dev ABI-2 模型包。checkpoint 适配使用本机 GPT-SoVITS 运行时，支持 v1、v2、
-v2Pro、v2ProPlus、v3、v4、V5 Turbo 和 V5 Dev。
+## 项目介绍
 
-仓库提供推理源码和模型包准备工具。模型权重和参考声线由模型包作者单独
-提供，本仓库不包含这些文件。
+Alice Native TTS 是本地 GPT-SoVITS 推理库和独立命令行工具。可以用
+`alice-tts` 生成 WAV，也可以启动常驻 JSONL worker，边合成边接收 PCM。
+Rust 应用可通过会话接口直接接收音频。请求支持取消，取消后可以继续使用会话。
 
-## 独立命令行
+| 输入格式 | 模型 | 音频交付 |
+| --- | --- | --- |
+| ABI-1 原生 ONNX 包 | v2Pro，含兼容的 v2ProPlus 权重导出 | 32 kHz PCM，有匹配的流式图时按语义 token 分块 |
+| ABI-2 原生 ONNX 包 | v3、v4、V5 Turbo、V5 Dev | v3 为 24 kHz，其余为 48 kHz，按文本片段交付，V5 可开启提前出声 |
+| Checkpoint 清单 | v1、v2、v2Pro、v2ProPlus、v3、v4、V5 Turbo、V5 Dev | 调用本机 GPT-SoVITS Python 运行时，采样率和流式方式随模型家族而定 |
 
-用 `cargo build --locked --release --bin alice-tts` 构建命令行程序。它支持
-模型检查、WAV 合成和常驻 JSONL 流式服务。Rust 应用可以通过
-`alice_native_tts::session` 访问同一套模型加载和合成接口。使用方法、模型
-清单和进程协议见[独立使用指南](docs/standalone.md)。
+原生包由 Rust 和所选推理库执行。原生文本前端支持中文和英文，处理常见的
+数字、日期、时间和金额格式。模型文件、参考音频及转写由使用者提供。
 
-## 功能
+## 性能基准
 
-- 使用版本化 ONNX 图进行原生 Rust 推理。
-- 中文发音前端使用批量 G2PW；英文 G2P 使用随模型包提供的权重和 crate
-  内的 GRU 推理代码。
-- 支持若干数字、日期、时间、金额、百分比和温度格式的文本规范化。
-- 默认使用 CPU；Windows 可显式选择实验性的 DirectML 后端。
-- CUDA/TensorRT 的 GPT 路径保留 CPU 前端和声码器。另有 R1.2 文档说明的实验性流式 VITS CUDA EP 路径。GPT Step 始终禁止 CPU 回退；Encoder 默认严格放置，只有显式诊断模式才允许审计过的 CPU 辅助节点。
-- 带有匹配流式图的 ABI-1 模型包按 token 块输出。ABI-2 扩散模型按文本片段输出 PCM。
-- 在 ONNX 图运行之间协作式响应取消。
+本机使用 Windows 11、Core Ultra 9 285K 和桌面 RTX 5070 Ti 16 GB。各批为
+单请求热态测量。**首包**从提交请求计到收到首个 PCM 块。**整句**计到
+`done`。**RTF** 为整句耗时除以实际返回的音频时长。计时排除模型加载、
+引擎构建和设备播放。
 
-文本前端范围有限，不等同于 GPT-SoVITS Python 前端的完整实现。具体限制见
-[当前限制](#当前限制)。
+### V5 语义首窗 · 2026-11-25
 
-## 快速开始
+用同一可执行文件、权重、参考音频和文本对比关闭与开启首窗。每组预热 2 次、
+计时 6 次。Turbo 生成 16 个语义 token 后启动首个声学窗口，Dev 为 28 个。
+Turbo 每窗 4 步，Dev 每窗 32 步、guidance 1.30。
 
-安装稳定版 Rust 工具链，并准备一个兼容的模型包。下面的示例使用 ABI-1。
-ABI-2 使用独立命令行或 Rust session 接口。准备方法见[模型包](#模型包)。
+| 模型 | 输入 | 首包 P50（ms）↓ | 开启后首包 P95（ms）↓ | 可听起点 P50（ms）↓ | 整句 P50（ms）↓ |
+| --- | --- | ---: | ---: | ---: | ---: |
+| V5 Turbo | 短句 | 141.4 → **59.0** | 61.9 | 69.0 | 141.4 → 166.2 |
+| V5 Turbo | 标准句 | 185.2 → **57.9** | 58.9 | 67.9 | 498.8 → 516.9 |
+| V5 Turbo | 滚动长句 | 548.0 → **58.0** | 59.8 | 68.0 | 577.7 → 600.0 |
+| V5 Dev | 短句 | 368.5 → **263.8** | 270.6 | 273.8 | 368.6 → 508.4 |
+| V5 Dev | 标准句 | 418.6 → **262.1** | 267.0 | 272.1 | 1,186.1 → 1,382.1 |
+| V5 Dev | 滚动长句 | 838.3 → **262.9** | 298.3 | 272.9 | 1,105.7 → 1,367.9 |
 
-使用 CPU 合成 WAV：
+首包和整句按 **关闭 → 开启** 排列。六组首包 P50 加速 **1.40–9.44×**。
+Turbo 首包含 300 ms 音频，Dev 含 790 ms。可听起点按 PCM 的 −45 dBFS
+RMS 阈值估算。新增声学窗口会改变首个片段的波形，标准句整句分别增加
+18 ms 和 196 ms。标准句后两个片段与基准逐样本一致。
+[完整结果、PCM 检查与复现命令](docs/performance-v5-first-pcm.md)
 
-```powershell
-cargo run --release --example synthesize -- ./model-pack "你好，今天我们测试本地语音合成。" ./output.wav cpu
-```
+### v3–V5 原生扩散 · 2026-11-24 至 25
 
-在 Windows 上显式选择 DirectML：
+这一批按文本片段出声，滚动长句可以在首个声学窗口结束后提前交付。各组使用
+相同权重及参考音频，预热 2 次、计时 6 次。表中标准句按
+**checkpoint TensorRT → 原生 TensorRT** 排列。前者由 GPT-SoVITS 调度，
+后者使用 Rust 与 TensorRT 11.2，v3 的目标特征图使用 CUDA EP。
 
-```powershell
-cargo run --release --example synthesize -- ./model-pack "Hello, Alice." ./output.wav directml
-```
-
-CUDA 与 TensorRT EP 需要分别启用 Cargo feature；目前仅供实验，且需要与 ORT
-匹配的 CUDA/TensorRT 运行库：
-
-```powershell
-cargo run --release --features r1-cuda-ep --example synthesize -- ./model-pack "你好。" ./output.wav cuda
-cargo run --release --features r1-tensorrt-ep --example synthesize -- ./model-pack "你好。" ./output.wav tensor_rt
-```
-
-R1.1 CUDA GPT + CPU VITS 路径已在本机单一模型上通过性能及逐采样点音频一致性检查，但仍保持可选；
-TensorRT 因缺少运行库而受阻。初始审计见 [R1.0 GPU 后端记录](docs/performance-r1-gpu.md)，
-CUDA 1.30 运行时、常驻 KV Cache 与热态基准见 [R1.1 报告](docs/performance-r1.1.md)。
-流式 VITS CUDA EP 的独立对照见 [R1.2 报告](docs/performance-r1.2.md)；该路径需要显式允许已审计的 CPU 辅助节点，默认仍使用 CPU VITS。
-
-若要在指定毫秒数后取消，先传入后端，再传时长：
-
-```powershell
-cargo run --release --example synthesize -- ./model-pack "你好。" ./output.wav cpu 500
-```
-
-`stream_bench` 示例需要额外带流式图的模型包：
-
-```powershell
-cargo run --release --example stream_bench -- ./model-pack ./output cpu
-```
-
-## 模型包
-
-ABI-1 的 `v2Pro` 模型包以 32 kHz 输出，GPT KV 容量为 512 token。
-基础包包含 ONNX 图、前端数据、参考 WAV 及其文本，并须带有记录来源的
-`LICENSES.txt`。`pack.json` 声明 ABI 和参考文件。启用 token 流式还需
-`sovits_stream.onnx` 以及匹配的流式元数据。
-
-可以使用 `tools/prepare-native-tts-pack.py`，从本地兼容模型导出文件和
-GPT-SoVITS 安装准备模型包。Python 只用于这个离线准备步骤，运行时推理由
-Rust 完成。可选流式图由 `tools/export-native-tts-stream.py` 导出并进行数值
-对齐检查。
-
-ABI-2 支持 v3、v4、V5 Turbo 和 V5 Dev。Rust 调度 GPT、目标特征、扩散步和
-声码器，v3 输出 24 kHz，其余输出 48 kHz。Windows 实测路径使用原生 TensorRT
-GPT 和 ONNX Runtime CUDA 声学图。离线导出、依赖及参考条件见[原生扩散指南](docs/native-diffusion.md)。
-
-工具要求操作者自行提供模型文件和源码目录。请核对各上游模型的授权，并在
-模型包中保留来源声明。本源码仓库不应放入模型权重、声线参考录音或生成的
-模型包。
-
-## API 与 Alice 集成
-
-crate 对外提供 `Config`、`Backend`、`NativeTts`、模型包检查和文本规范化。
-最简嵌入示例见 `examples/synthesize.rs`，可用 `cargo doc --open` 生成 API
-文档。
-
-Project Alice 的桌面适配器留在主项目中，负责提供方选择、共享缓存、事件、
-播放队列和应用级取消；这些应用集成逻辑不属于本 crate。
-
-## 性能说明
-
-本机使用 Windows 11、Core Ultra 9 285K、桌面 RTX 5070 Ti 16 GB 和
-TensorRT 11.2。通过常驻 `alice-tts` JSONL worker 用同一中文文本和参考音频
-测试。首段和整句分别从发送请求计时到收到首个 `audio` 和 `done`。热态计时
-排除模型加载、引擎构建和播放耗时。RTF 为整句耗时除以实际返回的音频时长。
-
-### v3–V5 原生 TensorRT
-
-标准句每组预热 2 次，计时 6 次，取 P50。每格依次为 **checkpoint TensorRT →
-原生 TensorRT**，两条路径使用相同 GPT 和 SoVITS 权重。原生路径由 Rust
-调度，v3 的目标特征使用 CUDA EP。V5 Turbo 扩散 4 步，V5 Dev 保持 32 步
-和 guidance 1.30。
-
-| 模型 | 首段 PCM（ms）↓ | 整句（ms）↓ | RTF ↓ |
+| 模型 | 首包 P50（ms）↓ | 整句 P50（ms）↓ | RTF P50 ↓ |
 | --- | ---: | ---: | ---: |
-| v3 | 492 → **350** | 1,797 → **980** | 0.229 → **0.125** |
-| v4 | 518 → **298** | 1,812 → **872** | 0.249 → **0.111** |
-| V5 Turbo | 233 → **190** | 1,079 → **511** | 0.154 → **0.063** |
-| V5 Dev | 748 → **432** | 2,781 → **1,235** | 0.397 → **0.152** |
+| v3 | 492 → **350** | 1,797 → 980 | 0.229 → 0.125 |
+| v4 | 518 → **298** | 1,812 → 872 | 0.249 → 0.111 |
+| V5 Turbo | 233 → **190** | 1,079 → 511 | 0.154 → 0.063 |
+| V5 Dev | 748 → **432** | 2,781 → 1,235 | 0.397 → 0.152 |
 
-V5 Turbo 短句首段 P50 为 **145 ms**。短句、标准句和滚动长句共 24 项首段与
-整句 P50，相对 checkpoint TensorRT 加速 **1.22–3.02 倍**。详见
-[优化结果与复现命令](docs/performance-native-diffusion-tensorrt.md)、
-[checkpoint 测试口径](docs/performance-native-diffusion.md)和
-[调度测试](docs/performance-native-diffusion-scheduling.md)。
+四个模型、三种输入共 24 项首包与整句 P50，加速 **1.22–3.02×**。
+[优化过程与复现](docs/performance-native-diffusion-tensorrt.md) ·
+[同权重对照口径](docs/performance-native-diffusion.md) ·
+[调度测试](docs/performance-native-diffusion-scheduling.md)
 
-V5 可选用语义首窗。标准句首包 P50，Turbo 从 185 ms 降至 **58 ms**，
-Dev 从 419 ms 降至 **262 ms**。同机同输入下，gsv.cpp v0.1.3 分别为
-244 ms 和 862 ms。此模式会改变首个片段的波形。见[V5 首包基准](docs/performance-v5-first-pcm.md)。
+### Checkpoint CUDA 与 TensorRT · 2026-11-24
 
-### ABI-1 token 流式
+各家族在匹配的 GPT-SoVITS 运行时内比较 **PyTorch CUDA → checkpoint
+TensorRT**。TensorRT 执行 GPT Transformer，v1 到 v2ProPlus 同时使用
+TensorRT VITS 波形生成器，v3 到 V5 同时使用 TensorRT DiT Transformer
+块与声码器。使用同一输入，每组预热 3 次、计时 12 次，复用已构建的引擎。
 
-使用 TensorRT GPT 和 CUDA VITS，已有 v2Pro 模型包的标准句首段 P50 为
-**94 ms**，整句为 **804 ms**。从 v2Pro 和 v2ProPlus checkpoint 导出的
-原生包，首段 P50 分别为 **99 ms** 和 **103 ms**。三组首包均含 880 ms 的
-音频，每组预热 3 次、计时 12 次。另见[早期 CPU 和 DirectML 结果](docs/performance.md)。
+| 模型 | 首包 P50（ms）↓ | 整句 P50（ms）↓ | RTF P50 ↓ |
+| --- | ---: | ---: | ---: |
+| v1 | 316 → 176 | 1,187 → 747 | 0.170 → 0.107 |
+| v2 | 420 → 226 | 1,365 → 839 | 0.169 → 0.105 |
+| v2Pro | 365 → 209 | 1,355 → 862 | 0.182 → 0.114 |
+| v2ProPlus | 366 → 204 | 1,360 → 845 | 0.182 → 0.112 |
+| v3 | 981 → 480 | 3,210 → 1,791 | 0.415 → 0.228 |
+| v4 | 956 → 514 | 3,109 → 1,817 | 0.434 → 0.250 |
+| V5 Turbo | 388 → 210 | 1,505 → 921 | 0.215 → 0.132 |
+| V5 Dev | 1,491 → 732 | 4,751 → 2,757 | 0.679 → 0.394 |
+
+[Checkpoint TensorRT 配置与图覆盖范围](docs/standalone.md#checkpoint-tensorrt)
+
+### ABI-1 token 流式 · 2026-11-24
+
+原生 32 kHz 包使用 TensorRT GPT、CUDA VITS 和独立的首段 VITS 会话。
+每组预热 3 次、计时 12 次，首包均有 880 ms 音频。
+
+| 模型包 | 首包 P50（ms）↓ | 整句 P50（ms）↓ | RTF P50 ↓ |
+| --- | ---: | ---: | ---: |
+| 已有 v2Pro 包 | 94 | 804 | 0.121 |
+| 新导出的 v2Pro 包 | 99 | 1,101 | 0.141 |
+| 新导出的 v2ProPlus 权重包 | 103 | 1,052 | 0.135 |
+
+早期实测还覆盖 CPU、DirectML、CUDA GPT 和新中文文本的前端开销。
+在模型已加载、文本缓存未命中的 167-token 用例上，把 G2PW 与 BERT 切到
+CUDA 后，前端从 139.7 ms 降到 13.1 ms，首段从 280.7 ms 降到 156.2 ms。
+[CPU 与 DirectML](docs/performance.md) ·
+[原生 TensorRT 与 CUDA VITS](docs/performance-r2.2.md) ·
+[新文本的前端开销](docs/performance-r2.3.md)
 
 ### 同类 GPT-SoVITS 项目
 
-公开成绩保留各项目的输入场景和计时口径。
+同机实测 **gsv.cpp v0.1.3** 使用相同的文本、参考 WAV、扩散步数和
+guidance。Alice 使用常驻 JSONL worker 和 V5 语义首窗。gsv.cpp 使用
+Vulkan、FP16 AR 与 F32 声码器，通过本机 HTTP 长连接交付。首次读取含约
+85 ms PCM。下表为标准句，按 **Alice / gsv.cpp** 排列。
 
-| 项目与模型 | 硬件与场景 | 首段 PCM 或首包（ms）↓ | 整句（ms）↓ | RTF ↓ | 来源 |
-| --- | --- | ---: | ---: | ---: | --- |
-| Alice Native TTS · V5 Turbo | RTX 5070 Ti，原生 TensorRT 语义首窗，JSONL 标准句 | 57.85 | 516.90 | 0.0649 | [本机基准](docs/performance-v5-first-pcm.md) |
-| AnifLive-TTS v1.5 · V5 Turbo | RTX 5070 Ti，TensorRT 11 / Triton FP16，HTTP 长连接 PCM | 66.89 | 75.98 | 0.0473 | [AnifLive HTTP 基准](https://github.com/Hiruynk/AnifLive-TTS/blob/main/docs/BENCHMARKS.md#v15-http-measurements) |
-| gsv.cpp v0.1.3 · V5 Turbo | RTX 5070 Ti，Vulkan，HTTP 长连接 PCM | 174.45 | 197.06 | 0.1120 | [AnifLive 的 gsv.cpp 实测](https://github.com/Hiruynk/AnifLive-TTS/blob/main/docs/BENCHMARKS.md#v15-http-measurements) |
-| GPT-SoVITS-cpp | RTX 2080 Ti，TensorRT FP16 流式，约 19 秒混语音频 | 460 | — | 0.1205 | [SDK 基准](https://github.com/GPT-SoVITS-Devel/GPT-SoVITS-cpp#-performance-benchmarks) |
-| GPT-SoVITS 上游 · v2ProPlus | RTX 4090，约 4 分钟音频 | — | — | 0.014 | [上游 README](https://github.com/RVC-Boss/GPT-SoVITS#features) |
+| 模型 | 首包 P50（ms）↓ | 可听起点 P50（ms）↓ | 整句 P50（ms）↓ |
+| --- | ---: | ---: | ---: |
+| V5 Turbo | 57.9 / 243.6 | 67.9 / 403.6 | 516.9 / 732.8 |
+| V5 Dev | 262.1 / 862.4 | 272.1 / 1,022.4 | 1,382.1 / 2,515.8 |
 
-三组 V5 Turbo 使用相同型号的 GPU，文本、声线和交付协议各异。Alice 的标准句
-首包有 0.30 秒 PCM，整句有 7.96 秒音频。HTTP 基准每种模式测了 1,000 次
-AnifLive 和 300 次 gsv.cpp 请求并取中位数，分别记录首包和可听起点。
+六组首包 P50 相对 gsv.cpp 加速 **3.08–9.36×**。滚动 Turbo 用例中，
+Alice 用 600.0 ms 返回 9.12 秒音频，gsv.cpp 用 595.1 ms 返回 8.08 秒。
+[同机对照报告](docs/performance-v5-first-pcm.md#同机-gsvcpp-对照)
 
-## 当前限制
+以下公开成绩保留各项目的输入和计时口径。
 
-- 原生模型包支持中文、英文。
-- ABI-1 导出图的语速固定为 1.0，声学噪声固定为 0.0。ABI-2 按模型家族固定扩散步数、初始噪声和 guidance。
-- Alice 适配器的进程内缓存只保留一种基础声线配置；crate 本身将缓存所有权
-  留给宿主程序。
-- 取消只能在 ONNX 图运行之间协作处理，不能强制中断正在执行的 ONNX kernel。
-- 中文轻声/儿化、依赖词性的英文同形异音词、日语和完整地区化数字语法尚未
-  覆盖。
-- 长文本长度受导出的 GPT KV 缓存容量限制。
+- **AnifLive-TTS v1.5 · V5 Turbo** 在 RTX 5070 Ti 上测得 HTTP 长连接首包 P50 为 66.89 ms，可听起点 P50 为 80.93 ms。[HTTP 基准](https://github.com/Hiruynk/AnifLive-TTS/blob/main/docs/BENCHMARKS.md#v15-http-measurements)
+- **GPT-SoVITS-cpp TensorRT 流式** 在 RTX 2080 Ti 上测得首包 460 ms、RTF 0.1205，输出约 19 秒音频。[SDK 基准](https://github.com/GPT-SoVITS-Devel/GPT-SoVITS-cpp#-performance-benchmarks)
+- **GPT-SoVITS 上游 v2ProPlus** 在 RTX 4090 上合成约 4 分钟音频，公开 RTF 为 0.014。[上游 README](https://github.com/RVC-Boss/GPT-SoVITS#features)
 
-## 许可证与来源
+## 使用指南
 
-crate 使用 Apache-2.0。中文发音表、tokenizer 数据和拼音拆分代码的上游来源
-见 [NOTICE.md](NOTICE.md)。模型包组件各自保有来源和授权信息，请查阅模型包的
-`LICENSES.txt`。
+### 构建命令行工具
+
+安装稳定版 Rust。Windows 还需要 MSVC 构建工具。从仓库根目录构建。
+
+```powershell
+cargo build --locked --release --bin alice-tts
+```
+
+也可以用 `cargo install --locked --path . --bin alice-tts` 将工具安装到
+命令搜索路径。
+
+### 准备模型
+
+原生推理使用模型包目录，直接运行 checkpoint 使用 JSON 清单。原生包包含
+`pack.json`、ONNX 图、前端数据和参考数据。ABI-1 的 token 流式还需经过校验的
+`sovits_stream.onnx` 和对应元数据。
+
+- **准备 ABI-1**。使用兼容的导出文件与 GPT-SoVITS 安装生成模型包。[准备脚本](tools/prepare-native-tts-pack.py) · [流式图导出](tools/export-native-tts-stream.py)
+- **导出 ABI-2**。提供本地 v3–V5 checkpoint、参考 WAV 和同权重 GPT 图。CPU 用 FP32，CUDA/TensorRT 可用 FP16。[原生扩散指南](docs/native-diffusion.md)
+- **直接使用 checkpoint**。在清单里填写模型家族、权重路径、参考 WAV 和转写，再由命令行启动对应的本机运行时。[清单与依赖配置](docs/standalone.md#gpt-sovits-checkpoint)
+
+参考、文本及生成 token 共用原生 GPT 的 512 个缓存位置。合成长文时，按段
+提交文本。
+
+### 生成 WAV 或接收 PCM
+
+按模型包和推理库选择原生设备。
+
+| 原生设备 | 配置 |
+| --- | --- |
+| `cpu` | 默认构建，ABI-2 扩散使用 FP32 包 |
+| `directml` | Windows 上的 ABI-1 实验 GPU 后端 |
+| `cuda` | 用 `r1-cuda-ep` 构建并提供带 CUDA provider 的 ONNX Runtime |
+| `tensor_rt_native` | 使用 TensorRT 和 CUDA runtime 构建，见下方 Windows 配置 |
+
+以下示例使用支持 CPU 的模型包。
+
+```powershell
+./target/release/alice-tts inspect ./model-pack
+./target/release/alice-tts synthesize ./model-pack --device cpu --text '你好，今天测试本地合成。' --output ./hello.wav
+./target/release/alice-tts worker ./model-pack --device cpu --warmup-text '今天测试本地语音。'
+```
+
+收到 `ready` 后，从 stdin 发送 UTF-8 JSON，每行一个对象。
+
+```json
+{"op":"synthesize","request_id":"demo","text":"你好，今天测试本地合成。"}
+```
+
+stdout 的 `audio` 事件包含采样率和 Base64 编码的单声道 PCM16。每条请求
+以 `done`、`cancelled` 或 `error` 结束。向当前 `request_id` 发送
+`cancel` 可以取消合成。[JSONL 协议](docs/standalone.md#jsonl-协议)
+
+通过 checkpoint 使用 CUDA PyTorch 时，将运行时路径指向本机 GPT-SoVITS。
+使用 checkpoint TensorRT 时选择 `--device tensor_rt` 并准备对应的 Python
+绑定和动态库。
+
+```powershell
+./target/release/alice-tts worker ./voice.json --gpt-sovits-root ./GPT-SoVITS --device cuda
+```
+
+### 原生 TensorRT 11 GPT（Windows x64）
+
+配置 TensorRT SDK、CUDA runtime 和 CUDA NVCC 头文件目录。
+`ORT_DYLIB_PATH` 指向支持 CUDA 的 ONNX Runtime DLL。将 TensorRT、
+CUDA runtime、cuBLAS 与 ORT 对应的 DLL 目录加入 `PATH`。
+
+```powershell
+$env:ALICE_TRT_HOME = 'C:/SDK/TensorRT-11.2.1.2'
+$env:ALICE_CUDA_HOME = 'C:/SDK/cuda_cudart-windows-x86_64-12.9.79-archive'
+$env:ALICE_CUDA_NVCC_HOME = 'C:/SDK/cuda_nvcc-windows-x86_64-12.9.86-archive'
+$env:ORT_DYLIB_PATH = 'C:/SDK/onnxruntime/onnxruntime.dll'
+cargo build --locked --release --features r2-trt-native-cuda-vits --bin alice-tts
+```
+
+复现 V5 成绩前，准备混合 FP16 GPT opt5 缓存和声学 TensorRT plan。语义首窗
+按需启用，Turbo 设为 16，Dev 设为 28。
+[TensorRT plan 的构建与配置](docs/performance-native-diffusion-tensorrt.md#复现原生-tensorrt)
+
+```powershell
+$env:ALICE_NATIVE_TTS_V5_FIRST_PCM_TOKENS = '16'
+./target/release/alice-tts worker ./packs/v5turbo --device tensor_rt_native
+```
+
+ABI-1 可单独导出 active-length GPT step 图，用
+`ALICE_NATIVE_TTS_TRT_SHAPE_STEP_ONNX` 指定图路径。
+[Active-length 导出脚本](tools/prepare-native-active-len.py) ·
+[CUDA VITS 和独立首段会话](docs/standalone.md#原生-onnx-模型) ·
+[CUDA 文本前端配置](docs/performance-r2.3.md)
+
+### Rust 集成
+
+使用 `alice_native_tts::session::{Model, Session, SessionOptions}` 打开模型并
+加载到选定设备，从 `Session::synthesize` 的回调接收 `&[i16]`。采样率见
+`Session::info()`。Project Alice 的应用适配器负责提供方选择和播放。
+[会话 API](src/session.rs)
+
+### 许可证与来源
+
+推理代码使用 Apache-2.0 许可证，复用的前端资源保留上游署名。模型权重和
+参考音频的来源与使用条款记录在包内的 `LICENSES.txt`。
+[许可证](LICENSE) · [第三方资源声明](NOTICE.md)
