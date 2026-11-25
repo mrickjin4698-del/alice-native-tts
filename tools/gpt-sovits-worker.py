@@ -1,6 +1,7 @@
 """Local GPT-SoVITS checkpoint adapter embedded in the Alice TTS binary."""
 
 import base64
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -39,7 +40,8 @@ def load(spec):
             # The worker owns its configuration for the lifetime of this process.
             self.update_configs()
 
-    device = spec["device"]
+    use_tensorrt = spec["device"] == "tensor_rt"
+    device = "cuda" if use_tensorrt else spec["device"]
     if device == "cuda" and not torch.cuda.is_available():
         raise ValueError("CUDA was requested but this PyTorch runtime cannot use CUDA")
 
@@ -64,13 +66,14 @@ def load(spec):
         raise ValueError(f"unsupported text language {spec['default_language']}")
 
     model.set_ref_audio(spec["reference_audio"])
+    stages = install_checkpoint_tensorrt(model, spec["gpt"], torch) if use_tensorrt else ()
     fragment = family in ("v3", "v4", "v5turbo", "v5dev")
     rate = int(model.vocoder_configs["sr"] if fragment else model.configs.sampling_rate)
     send("ready", sample_rate=rate, languages=model.configs.languages)
-    return model, fragment, rate
+    return model, fragment, rate, stages
 
 
-def synthesize(model, spec, fragment, sample_rate, message):
+def synthesize(model, spec, fragment, sample_rate, stages, message):
     import numpy as np
 
     language = message.get("language") or spec["default_language"]
@@ -91,6 +94,9 @@ def synthesize(model, spec, fragment, sample_rate, message):
         "super_sampling": False,
         "seed": 1234,
     }
+    if stages:
+        inputs.update(use_cuda_graph=False, use_flash_attention=False, cache_dit="off")
+    calls_before = [stage.calls for stage in stages]
     count = 0
     for rate, audio in model.run(inputs):
         audio = np.asarray(audio)
@@ -101,15 +107,22 @@ def synthesize(model, spec, fragment, sample_rate, message):
             send("audio", pcm=base64.b64encode(audio.astype("<i2", copy=False).tobytes()).decode("ascii"))
     if count == 0:
         raise ValueError("GPT-SoVITS returned no PCM samples")
+    unused = [stage.label for stage, before in zip(stages, calls_before) if stage.calls == before]
+    if unused:
+        raise RuntimeError(f"GPT-SoVITS did not execute TensorRT {', '.join(unused)}")
+    if stages and calls_before[0] == 0:
+        counts = ", ".join(f"{stage.label}={stage.calls}" for stage in stages)
+        print(f"[alice-tts] TensorRT calls: {counts}", file=sys.stderr, flush=True)
     send("done", samples=count)
 
 
 def main():
     spec = json.loads(sys.stdin.readline())
-    model, fragment, rate = load(spec)
+    model, fragment, rate, stages = load(spec)
     for line in sys.stdin:
         try:
-            synthesize(model, spec, fragment, rate, json.loads(line))
+            with stages[0].backend.stream_context() if stages else nullcontext():
+                synthesize(model, spec, fragment, rate, stages, json.loads(line))
         except Exception as error:
             traceback.print_exc()
             send("error", message=str(error))

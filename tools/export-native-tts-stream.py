@@ -1,4 +1,4 @@
-"""Offline v2Pro streaming graph export. Never imported by the Rust runtime.
+"""Offline v2Pro and v2ProPlus streaming graph export.
 
 Uses the same enc_p latent overlap and zero-noise decoding as GPT-SoVITS'
 decode_streaming; replaces in-place latent writes with dynamic concatenation.
@@ -38,7 +38,7 @@ def main():
 
     torch.set_num_threads(4)
     torch.set_grad_enabled(False)
-    print("Loading v2Pro weights", flush=True)
+    print("Loading SoVITS weights", flush=True)
     saved = load_sovits_new(str(args.weights))
     def as_dict(value):
         if isinstance(value, dict): return {k:as_dict(v) for k,v in value.items()}
@@ -47,8 +47,8 @@ def main():
         return value
     config = as_dict(saved["config"])
     _, version, _ = get_sovits_version_from_path_fast(str(args.weights))
-    if version != "v2Pro" or config["data"]["sampling_rate"] != 32000:
-        raise SystemExit("Requires the ABI-1 v2Pro 32 kHz weights")
+    if version not in ("v2Pro", "v2ProPlus") or config["data"]["sampling_rate"] != 32000:
+        raise SystemExit("Requires ABI-1 compatible v2Pro or v2ProPlus 32 kHz weights")
     config["model"].update(version=version, semantic_frame_rate="25hz")
     model = SynthesizerTrn(config["data"]["filter_length"] // 2 + 1,
                            config["train"]["segment_size"] // config["data"]["hop_length"],

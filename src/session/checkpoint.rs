@@ -10,7 +10,11 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
-const WORKER: &str = include_str!("../../tools/gpt-sovits-worker.py");
+const WORKER: &str = concat!(
+    include_str!("../../tools/gpt-sovits-tensorrt.py"),
+    "\n",
+    include_str!("../../tools/gpt-sovits-worker.py")
+);
 
 #[derive(Serialize)]
 struct WorkerConfig {
@@ -136,8 +140,13 @@ impl Session {
         options: &SessionOptions,
         cancelled: &impl Fn() -> bool,
     ) -> SessionResult<Self> {
-        if !matches!(options.device, Device::Cpu | Device::Cuda) {
-            return Err(invalid("GPT-SoVITS checkpoints use cpu or cuda"));
+        if !matches!(
+            options.device,
+            Device::Cpu | Device::Cuda | Device::TensorRt
+        ) {
+            return Err(invalid(
+                "GPT-SoVITS checkpoints use cpu, cuda, or tensor_rt",
+            ));
         }
         let root = options.gpt_sovits_root.as_ref().ok_or_else(|| {
             invalid("GPT-SoVITS checkpoints require an installation (--gpt-sovits-root)")
