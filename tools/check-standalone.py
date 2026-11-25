@@ -21,7 +21,10 @@ WEIGHTS = {
     "v2ProPlus": ("s1v3.ckpt", "v2Pro/s2Gv2ProPlus.pth"),
     "v3": ("s1v3.ckpt", "s2Gv3.pth"),
     "v4": ("s1v3.ckpt", "gsv-v4-pretrained/s2Gv4.pth"),
+    "v5turbo": ("s1v3.ckpt", "gsv-v5-pretrained/s2Gv5turbo.pth"),
+    "v5dev": ("s1v3.ckpt", "gsv-v5-pretrained/s2Gv5dev.pth"),
 }
+DIFFUSION_RATES = {"v3": 24000, "v4": 48000, "v5turbo": 48000, "v5dev": 48000}
 TEXT = "今天我们测试本地语音，后面的内容会继续生成，直到整个回复播放完毕。"
 FRAGMENTS = "这是一条本地语音合成测试。接下来继续播报第二句话，验证分段音频能够完整返回。"
 
@@ -138,8 +141,8 @@ def exercise(args, mode, model, device, expected_rate, streaming, check_cancel, 
     with wave.open(str(args.output / (mode + ".wav")), "wb") as wav:
         wav.setparams((1, 2, expected_rate, 0, "NONE", "not compressed"))
         wav.writeframes(pcm)
-    if mode == "v4":
-        wav_out = args.output / "v4-cli.wav"
+    if mode in ("v4", "v5turbo"):
+        wav_out = args.output / f"{mode}-cli.wav"
         rendered = subprocess.run(
             [str(args.executable), "synthesize", str(model), "--text", TEXT, "--output", str(wav_out), *options],
             text=True, encoding="utf-8", cwd=args.output, env=env, capture_output=True, timeout=args.timeout,
@@ -187,9 +190,10 @@ def main():
             "reference_audio": str(args.native_pack / pack["reference_audio"]),
             "reference_text": pack["reference_text"], "reference_language": "zh", "default_language": "zh",
         }, ensure_ascii=False), encoding="utf-8")
-        rate = {"v3": 24000, "v4": 48000}.get(family, 32000)
-        streaming = "text_fragments" if family in ("v3", "v4") else "semantic_tokens"
-        tests.append((family, manifest, args.checkpoint_device, rate, streaming, family == "v4"))
+        rate = DIFFUSION_RATES.get(family, 32000)
+        streaming = "text_fragments" if family in DIFFUSION_RATES else "semantic_tokens"
+        check_cancel = family in ("v4", "v5turbo", "v5dev")
+        tests.append((family, manifest, args.checkpoint_device, rate, streaming, check_cancel))
     records = {}
     for mode, *options in tests:
         print(f"Testing {mode}", flush=True)

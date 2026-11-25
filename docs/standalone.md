@@ -14,6 +14,7 @@ Windows x64 运行包解压后可直接运行。系统需要 DirectML 和 Micros
 | ABI-1 v2Pro ONNX | Rust + ONNX Runtime，支持可选 GPU 后端 | 有匹配流式图时分 token 块输出 |
 | GPT-SoVITS v1、v2、v2Pro、v2ProPlus checkpoint | 本机 GPT-SoVITS Python 子进程 | 分 token 块输出 |
 | GPT-SoVITS v3、v4 checkpoint | 本机 GPT-SoVITS Python 子进程 | 按文本片段输出 |
+| GPT-SoVITS V5 Turbo、V5 Dev checkpoint | 支持 V5 的本机 GPT-SoVITS Python 子进程 | 按文本片段输出 48 kHz PCM |
 
 ## 原生 ONNX 模型
 
@@ -53,6 +54,18 @@ alice-tts worker ./voice.json --gpt-sovits-root 'D:/GPT-SoVITS' --device cuda
 ```
 
 `--device cpu` 使用 PyTorch CPU。`--device cuda` 使用当前 Python 环境里的 CUDA PyTorch。v3 的典型输出为 24 kHz，v4 的典型输出为 48 kHz。调用方使用 `ready.model.sample_rate` 或 `audio.sample_rate` 确认实际采样率。
+
+## GPT-SoVITS V5
+
+V5 清单的 `family` 取值为 `v5turbo` 或 `v5dev`，分别对应 `s2Gv5turbo.pth` 和 `s2Gv5dev.pth`。GPT 路径可指向官方 `s1v3.ckpt`。将 V5 声码器放在 V5 安装的 `GPT_SoVITS/pretrained_models/gsv-v5-pretrained/vocoder.pth`，并把 `--gpt-sovits-root` 指向支持 V5 的 GPT-SoVITS 安装。[V5 权重](https://huggingface.co/lj1995/GPT-SoVITS/tree/main/gsv-v5-pretrained) · [GPT-SoVITS V5 说明](https://github.com/RVC-Boss/GPT-SoVITS#v5-release-notes)
+
+```powershell
+alice-tts worker ./voice-v5turbo.json --gpt-sovits-root 'D:/GPT-SoVITS-V5' --device cuda
+alice-tts synthesize ./voice-v5dev.json --gpt-sovits-root 'D:/GPT-SoVITS-V5' --device cuda --text '你好，今天测试 V5。' --output ./hello-v5.wav
+```
+
+两种 V5 模型均输出 48 kHz PCM，按上游的文本片段接口交付音频。Turbo 使用上游的 4 步采样默认值，Dev 使用 32 步采样默认值。运行时加载后会核对清单里的家族与实际权重。
+
 
 ## JSONL 协议
 

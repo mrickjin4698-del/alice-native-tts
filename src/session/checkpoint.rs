@@ -147,6 +147,12 @@ impl Session {
             runtime_root.join("GPT_SoVITS/TTS_infer_pack/TTS.py"),
             "GPT-SoVITS inference",
         )?;
+        if matches!(manifest.family, ModelFamily::V5Turbo | ModelFamily::V5Dev) {
+            existing_file(
+                runtime_root.join("GPT_SoVITS/pretrained_models/gsv-v5-pretrained/vocoder.pth"),
+                "GPT-SoVITS V5 vocoder",
+            )?;
+        }
         let bundled = runtime_root.join(if cfg!(windows) {
             "runtime/python.exe"
         } else {

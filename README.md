@@ -4,7 +4,8 @@
 
 Local GPT-SoVITS synthesis for applications and the command line. The native
 Rust engine runs v2Pro ONNX packs. The checkpoint adapter runs v1, v2, v2Pro,
-v2ProPlus, v3 and v4 through an installed GPT-SoVITS runtime in a local process.
+v2ProPlus, v3, v4, V5 Turbo and V5 Dev through an installed GPT-SoVITS runtime
+in a local process.
 
 This repository contains the inference code and pack preparation tools. Model
 weights and reference voices are supplied separately by each pack author and

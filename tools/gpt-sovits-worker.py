@@ -30,6 +30,10 @@ def load(spec):
     import torch
     from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
 
+    family = spec["family"]
+    if family not in TTS_Config.default_configs:
+        raise ValueError(f"this GPT-SoVITS installation does not support {family}")
+
     class SessionConfig(TTS_Config):
         def save_configs(self, configs_path=None):
             # The worker owns its configuration for the lifetime of this process.
@@ -42,7 +46,7 @@ def load(spec):
     model_config = {
         "device": device,
         "is_half": device == "cuda",
-        "version": spec["family"],
+        "version": family,
         "t2s_weights_path": spec["gpt"],
         "vits_weights_path": spec["sovits"],
         "bert_base_path": spec["bert"],
@@ -50,9 +54,9 @@ def load(spec):
     }
     settings = SessionConfig({"custom": model_config})
     model = TTS(settings)
-    if model.configs.version != spec["family"]:
+    if model.configs.version != family:
         raise ValueError(
-            f"expected checkpoint family {spec['family']} but GPT-SoVITS loaded {model.configs.version}"
+            f"expected checkpoint family {family} but GPT-SoVITS loaded {model.configs.version}"
         )
     if spec["reference_language"] not in model.configs.languages:
         raise ValueError(f"unsupported reference language {spec['reference_language']}")
@@ -60,7 +64,7 @@ def load(spec):
         raise ValueError(f"unsupported text language {spec['default_language']}")
 
     model.set_ref_audio(spec["reference_audio"])
-    fragment = spec["family"] in ("v3", "v4")
+    fragment = family in ("v3", "v4", "v5turbo", "v5dev")
     rate = int(model.vocoder_configs["sr"] if fragment else model.configs.sampling_rate)
     send("ready", sample_rate=rate, languages=model.configs.languages)
     return model, fragment, rate

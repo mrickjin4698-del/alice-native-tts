@@ -4,7 +4,7 @@
 
 面向应用和命令行的本地 GPT-SoVITS 推理项目。Rust 原生引擎运行 v2Pro
 ONNX 模型包。checkpoint 适配使用本机 GPT-SoVITS 运行时，支持 v1、v2、
-v2Pro、v2ProPlus、v3 和 v4。
+v2Pro、v2ProPlus、v3、v4、V5 Turbo 和 V5 Dev。
 
 仓库提供推理源码和模型包准备工具。模型权重和参考声线由模型包作者单独
 提供，本仓库不包含这些文件。

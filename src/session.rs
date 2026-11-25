@@ -50,6 +50,10 @@ pub enum ModelFamily {
     V3,
     #[serde(rename = "v4")]
     V4,
+    #[serde(rename = "v5turbo")]
+    V5Turbo,
+    #[serde(rename = "v5dev")]
+    V5Dev,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -198,7 +202,9 @@ impl Model {
             .map(|path| existing_directory(parent.join(path), "HuBERT"))
             .transpose()?;
         let streaming = match manifest.family {
-            ModelFamily::V3 | ModelFamily::V4 => Streaming::TextFragments,
+            ModelFamily::V3 | ModelFamily::V4 | ModelFamily::V5Turbo | ModelFamily::V5Dev => {
+                Streaming::TextFragments
+            }
             _ => Streaming::SemanticTokens,
         };
         Ok(Self {
