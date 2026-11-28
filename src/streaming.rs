@@ -293,6 +293,8 @@ impl StreamDecoder {
             binding.bind_input("overlap_latent", &previous)?;
             bind_cuda_vits_cpu_outputs(binding)?;
             let (out, vits_run_ns) = measure_profiled(profile, ProfilePhase::VitsRun, || {
+                #[cfg(windows)]
+                let _range = crate::nvtx::Range::push(b"alice_vits_stream\0");
                 Ok(session.run_binding(binding)?)
             })?;
             let (_, device_sync_ns) = measure_profiled(profile, ProfilePhase::DeviceSync, || {

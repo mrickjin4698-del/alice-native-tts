@@ -67,8 +67,7 @@ struct TensorProto {
 pub(crate) struct VoiceGraphs {
     gpt: Weights,
     sovits: Weights,
-    #[cfg(feature = "r1-cuda-ep")]
-    precision: NativePrecision,
+    pub(crate) precision: NativePrecision,
 }
 
 impl VoiceGraphs {
@@ -91,7 +90,6 @@ impl VoiceGraphs {
         Ok(Self {
             gpt,
             sovits,
-            #[cfg(feature = "r1-cuda-ep")]
             precision,
         })
     }

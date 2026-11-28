@@ -5,6 +5,7 @@ use crate::{
     frontend::Frontend,
     invalid,
     profiling::{ProfileCollector, ProfilePhase},
+    session::NativePrecision,
     streaming::{
         find_bounded_preview_join, first_voice_sample, preview_fallback_reason,
         stitch_bounded_preview, BoundedPreviewJoin, SolaAlignment, StreamDecoder, CHUNK_TOKENS,
@@ -196,7 +197,7 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
         let bytes = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
         eprintln!("[alice-native-tts load] SESSION name={name} backend={backend:?} bytes={bytes}");
     }
-    open_graph(name, backend, false, |mut builder| {
+    open_graph(name, backend, None, |mut builder| {
         builder
             .commit_from_file(path)
             .map_err(|e| invalid(e.to_string()))
@@ -206,7 +207,7 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
 fn open_graph(
     name: &str,
     backend: Backend,
-    allow_cpu_helpers: bool,
+    checkpoint_precision: Option<NativePrecision>,
     commit: impl FnOnce(ort::session::builder::SessionBuilder) -> Result<Session>,
 ) -> Result<Session> {
     let _load_trace = match name {
@@ -354,6 +355,12 @@ fn open_graph(
         if matches!(target_tuning.as_deref(), Some("nc1d" | "tf32_nc1d")) {
             provider = provider.with_conv1d_pad_to_nc1d(true);
         }
+        if name == "sovits_stream" && checkpoint_precision == Some(NativePrecision::Fp16) {
+            // Use the default cuDNN algorithm for the short, variable-length
+            // chunks in raw v2Pro FP16 streaming.
+            provider =
+                provider.with_conv_algorithm_search(ort::ep::cuda::ConvAlgorithmSearch::Default);
+        }
         if enable_gpt_step_cuda_graph {
             provider = provider.with_cuda_graph(true);
         }
@@ -388,6 +395,10 @@ fn open_graph(
             ])
             .map_err(|e| invalid(e.to_string()))?;
     }
+    // Raw encoder and vocoder graphs use CPU shape helpers. The GPT step
+    // remains strict for both the checkpoint and pack paths.
+    let allow_cpu_helpers =
+        checkpoint_precision.is_some() && matches!(name, "gpt_encoder" | "sovits_stream");
     let strict_gpu_placement = strict_gpu_placement && !allow_cpu_helpers;
     if strict_gpu_placement {
         builder = builder
@@ -1126,10 +1137,7 @@ impl VoiceSource {
             Self::Pack => open_on(dir, name, backend),
             #[cfg(feature = "raw-checkpoint")]
             Self::Checkpoint(graphs) => {
-                // CUDA handles encoder and vocoder math, with CPU placement for
-                // shape helpers. The autoregressive step remains strict.
-                let allow_cpu_helpers = matches!(name, "gpt_encoder" | "sovits_stream");
-                open_graph(name, backend, allow_cpu_helpers, |builder| {
+                open_graph(name, backend, Some(graphs.precision), |builder| {
                     graphs.session(name, builder, _cancel)
                 })
             }
@@ -1217,7 +1225,7 @@ impl NativeTts {
         config: &Config,
         gpt: &Path,
         sovits: &Path,
-        precision: crate::session::NativePrecision,
+        precision: NativePrecision,
         cancel: &impl Fn() -> bool,
     ) -> Result<Self> {
         let (Some(reference), Some(transcript)) = (
