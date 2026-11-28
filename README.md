@@ -1,157 +1,153 @@
+<div align="center">
+
 # Alice Native TTS
 
-[简体中文](README.zh-CN.md)
+**Local GPT-SoVITS inference for the command line and your applications.**
 
-Local GPT-SoVITS synthesis for applications and the command line. The native
-Rust engine runs v2Pro ABI-1 packs and v3, v4, V5 Turbo and V5 Dev ABI-2 packs.
-The checkpoint adapter runs v1, v2, v2Pro, v2ProPlus, v3, v4, V5 Turbo and V5 Dev
-through an installed GPT-SoVITS runtime in a local process.
+[Quick start](#quick-start) · [Integration](#integration) · [Benchmarks](#benchmarks) · [简体中文](README.zh-CN.md)
 
-This repository contains the inference code and pack preparation tools. Model
-weights and reference voices are supplied separately by each pack author and
-are not included here.
+</div>
 
-## Standalone CLI
-
-Build `alice-tts` with `cargo build --locked --release --bin alice-tts`. The CLI
-inspects a model, synthesizes PCM16 WAV, or runs a persistent JSONL worker with
-warmup, streaming and cancellation. Rust clients can use the same model loader
-and synthesis interface through `alice_native_tts::session`.
-
-See the [standalone guide](docs/standalone.md) for supported checkpoints, model
-manifests, devices, and installation. Build with `--features server` to run
-`alice-tts serve MODEL` and expose [HTTP WAV and WebSocket PCM](docs/standalone.md#http-与-websocket).
-
-For original v2Pro checkpoints, build with `--features raw-checkpoint` and
-set `native_assets` in the model manifest. Rust reads the `.ckpt` and `.pth`
-files directly and uses the shared v2Pro frontend assets. Add `r1-cuda-ep`
-and select `--device cuda` for CUDA inference. Set `"native_precision": "fp16"`
-in the manifest to opt into FP16. The Windows x64 Release archives include
-`pack` and `serve` in both CPU and CUDA builds.
-[Checkpoint setup](docs/standalone.md#v2pro-原始权重直读)
-
-## Features
-
-- Native Rust inference over versioned ONNX graphs.
-- Mandarin pronunciation frontend with batched G2PW and English G2P using the
-  included GRU inference code and pack-provided weights.
-- Number, date, time, currency, percentage, and temperature normalization for
-  supported display forms.
-- CPU by default; DirectML is available on Windows as an experimental backend.
-- The CUDA/TensorRT EP GPT path keeps the frontend and vocoder on CPU. A separate,
-  experimental streaming VITS CUDA EP path is documented in R1.2. The optional
-  native TensorRT 11 GPT backend is Windows x64-only and feature-gated; it keeps
-  K/V cache on the GPU and retains CPU sampling. The two TensorRT routes use
-  different runtime APIs.
-- Optional token streaming with a matching ABI-1 streaming graph. ABI-2
-  diffusion packs emit PCM after each text fragment.
-- Cooperative cancellation between ONNX graph runs.
-
-The text frontend is intentionally scoped. It is not full GPT-SoVITS Python
-frontend parity; see [current limits](#current-limits).
+Alice Native TTS runs GPT-SoVITS in Rust. Use `alice-tts` to write a WAV, pipe audio
+into an application, or keep a model loaded for repeated requests. The native
+v2Pro path reads original `.ckpt` and `.pth` files with shared frontend assets.
 
 ## Quick start
 
-Install a stable Rust toolchain and provide a compatible model pack in a
-local directory. The example commands below use ABI-1. ABI-2 uses the
-standalone CLI and Rust session interface. See [Model packs](#model-packs).
-
-Synthesize a WAV with the CPU backend:
+Install the CLI from this checkout with a stable Rust toolchain. Supply a v2Pro
+checkpoint manifest as `voice.json`, or use a compatible directory containing `pack.json`.
+[Checkpoint manifest](docs/standalone.md#v2pro-原始权重直读)
 
 ```powershell
-cargo run --release --example synthesize -- ./model-pack "你好，今天我们测试本地语音合成。" ./output.wav cpu
+cargo install --locked --path . --bin alice-tts --features raw-checkpoint,server,pack-tools
+alice-tts inspect ./voice.json
+alice-tts synthesize ./voice.json --text "你好，我是 Alice。" --output ./speech.wav
 ```
 
-On Windows, select DirectML explicitly:
+CPU and FP32 are the defaults for direct v2Pro inference. A CUDA build accepts
+`--device cuda` and supports optional FP16 through `"native_precision": "fp16"`
+in the manifest.
+
+<details>
+<summary>Build for CUDA on Windows x64</summary>
 
 ```powershell
-cargo run --release --example synthesize -- ./model-pack "Hello, Alice." ./output.wav directml
+cargo build --locked --release --features raw-checkpoint,r1-cuda-ep,server,pack-tools --bin alice-tts
+./target/release/alice-tts.exe synthesize ./voice.json --device cuda --text "你好，我是 Alice。" --output ./speech-cuda.wav
 ```
 
-CUDA and TensorRT EPs are opt-in Cargo features and require compatible ORT plus
-CUDA/TensorRT runtime libraries:
+Use a CUDA-enabled ONNX Runtime DLL and the matching CUDA and cuDNN libraries.
+The Windows build was tested with ONNX Runtime 1.30.0, CUDA 13 and cuDNN 9.
+[CUDA setup](docs/standalone.md#cuda-直读)
+
+</details>
+
+## Integration
+
+| Entry point | What the application receives |
+| --- | --- |
+| `alice-tts synthesize MODEL` | A file or binary WAV or PCM over stdout. `--text-file -` reads UTF-8 from stdin up to EOF. |
+| `alice-tts worker MODEL` | A persistent JSONL subprocess with `ready`, PCM chunks, completion and cancellation. [JSONL protocol](docs/standalone.md#jsonl-协议) |
+| `alice-tts serve MODEL` | HTTP WAV and WebSocket PCM using one loaded model. [HTTP and WebSocket](docs/standalone.md#http-与-websocket) |
+| `alice_native_tts::session` | `Model` and `Session` in your Rust process, with PCM16 callbacks. [Session API](src/session.rs) |
+
+Pipe WAV into FFmpeg in PowerShell 7.4 or later.
 
 ```powershell
-cargo run --release --features r1-cuda-ep --example synthesize -- ./model-pack "Hello." ./output.wav cuda
-cargo run --release --features r1-tensorrt-ep --example synthesize -- ./model-pack "Hello." ./output.wav tensor_rt
+alice-tts synthesize ./voice.json --text-file ./input.txt --output - |
+  ffmpeg -i pipe:0 ./speech.flac
 ```
 
-The R1.1 CUDA GPT + CPU VITS path passed performance and bit-identical audio
-checks on one local host and remains opt-in. The ORT TensorRT EP still requires
-its own matching runtime; it is separate from native TensorRT 11. See the [historical
-R1.0 GPU audit](docs/performance-r1-gpu.md) and the [R1.1 CUDA runtime and
-benchmark report](docs/performance-r1.1.md).
-An opt-in streaming VITS CUDA EP experiment is measured separately in the
-[R1.2 report](docs/performance-r1.2.md); it requires explicit CPU fallback for
-the audited VITS helper nodes and does not change the default CPU VITS path.
+Use `--format s16le` with `--output -` to receive mono PCM16 as it is synthesized.
+Pipeline stdout contains audio bytes, diagnostics go to stderr, and the exit code
+reports whether synthesis completed. WAV output includes the sample rate and
+arrives with a finalized header after synthesis. [CLI pipe examples](docs/standalone.md#命令行管道)
 
-### Native TensorRT 11 GPT (Windows x64)
+## Benchmarks
 
-This backend is experimental and is not the ORT TensorRT EP. Build it with the
-TensorRT 11 SDK, CUDA runtime/NVCC headers, and a matching ONNX Runtime DLL
-available locally:
+All three runs used one RTX 5070 Ti with driver 610.88, the same v2Pro checkpoints
+and reference audio, and the same four Mandarin inputs. Each backend ran two passes
+with one warmup per process and four timed requests per pass. Rust used ONNX Runtime
+1.30.0 with CUDA 13, and Python used GPT-SoVITS with PyTorch 2.7.0 and CUDA 12.8.
 
-```powershell
-$env:ALICE_TRT_HOME = "C:\path\to\TensorRT-11.2.1.2"
-$env:ALICE_CUDA_HOME = "C:\path\to\cuda_cudart-windows-x86_64-12.9.79-archive"
-$env:ALICE_CUDA_NVCC_HOME = "C:\path\to\cuda_nvcc-windows-x86_64-12.9.86-archive"
-$env:ORT_DYLIB_PATH = "C:\path\to\onnxruntime.dll"
-# Add TensorRT, CUDA runtime and cuBLAS bin directories to PATH.
-cargo run --release --features r2-trt-native --example synthesize -- ./model-pack "Hello." ./output.wav tensor_rt_native
-```
+Times are medians in milliseconds from JSONL request submission to the first PCM
+event or `done`. Model loading and warmup happen before timing. Overall medians
+pool all eight requests per backend. For RTF, divide each request’s synthesis
+time by its audio duration, then take the median.
 
-The measured configuration and full reproduction notes are in the
-[R2.1 performance report](docs/performance-r2.1.md). TensorRT 11 GPT inference
-remains opt-in; CPU and DirectML defaults are unchanged.
+### Latest run
 
-An optional native TensorRT GPT + ORT CUDA VITS combination is available for
-local benchmarking with the `r2-trt-native-cuda-vits` feature. It requires the
-same native TensorRT SDK/runtime plus an ORT CUDA DLL and its CUDA dependencies.
-Enable it explicitly with `--cuda-vits`; `--cuda-vits-allow-cpu` permits the
-audited VITS helper/shape nodes to stay on CPU. The default backend is unchanged,
-and the mixed route is still experimental pending listening and playback
-validation. See the [R2.2 report](docs/performance-r2.2.md) for measured
-results and the observed execution-provider node split.
+| Backend | First PCM | Short total | Medium total | Overall total | RTF |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Rust CUDA FP16 (before) | 749 | 1,598 | 3,308 | 2,432 | 0.534 |
+| Rust CUDA FP16 (optimized) | **390** | **733** | 2,017 | 1,318 | **0.277** |
+| Rust CUDA FP32 | 413 | 747 | **1,843** | **1,287** | 0.278 |
+| Python CUDA FP16 | 616 | 916 | 1,926 | 1,461 | 0.303 |
 
-### Cold Chinese text frontend
+In the same run, the FP16 VITS change reduced first PCM latency by **48.0%** and overall completion time by **45.8%**. The streaming vocoder uses cuDNN `DEFAULT`
+for this path. In separate Nsight captures of the four inputs, the VITS range
+total fell from 5.24 s to 1.65 s and device synchronization calls fell from
+1,680 to zero. GPU kernel time increased from 230 ms to 865 ms.
 
-For a new Chinese text on a loaded `tensor_rt_native` or CUDA backend, the
-optional CUDA G2PW + BERT frontend avoids the CPU cold-miss cost. Build with
-`r1-cuda-ep` (the `r2-trt-native-cuda-vits` feature already includes it), then
-set these variables before creating `NativeTts`:
+Across the optimized and earlier FP16 outputs, duration changed by at most 7.84 ms
+and the lowest waveform correlation in aligned voiced windows was 0.9986.
+The two medium inputs were about 728 ms and 188 ms longer in optimized FP16
+than in Rust FP32.
 
-```powershell
-$env:ALICE_NATIVE_TTS_CUDA_FRONTEND = "1"
-$env:ALICE_NATIVE_TTS_FRONTEND_CUDA_DIAGNOSTIC_ALLOW_CPU = "1"
-```
+### Earlier runs
 
-The first variable selects CUDA for both G2PW and BERT unless a per-graph
-`ALICE_NATIVE_TTS_FRONTEND_G2PW_BACKEND` or
-`ALICE_NATIVE_TTS_FRONTEND_BERT_BACKEND` override is present. The second allows
-the audited shape/helper nodes to remain on CPU; the main graph math stays on
-CUDA. Without that explicit helper setting, ORT rejects CPU-assigned nodes at
-session creation instead of silently falling back. CPU and DirectML defaults
-are unchanged; selecting CPU or DirectML keeps those Frontend paths. The
-measured cold-text results and limits are in the
-[R2.3 report](docs/performance-r2.3.md).
+These are independent measurements. The old FP16 binary was also rerun in the
+latest comparison above.
 
-To cancel after a number of milliseconds, pass the backend first and duration second:
+| Run | Backend | First PCM | Short total | Medium total | Overall total | RTF |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| First direct CUDA run | Rust CUDA FP32 | 399 | 715 | 1,810 | 1,175 | 0.270 |
+| First direct CUDA run | Python CUDA FP16 | 602 | 863 | 1,906 | 1,400 | 0.302 |
+| First FP16 run | Rust CUDA FP32 | 342 | 666 | 1,685 | 1,125 | 0.253 |
+| First FP16 run | Rust CUDA FP16 | 607 | 1,356 | 3,012 | 2,128 | 0.471 |
+| First FP16 run | Python CUDA FP16 | 446 | 716 | 1,357 | 1,074 | 0.236 |
 
-```powershell
-cargo run --release --example synthesize -- ./model-pack "你好。" ./output.wav cpu 500
-```
+<details>
+<summary>Benchmark inputs</summary>
 
-The `stream_bench` example requires a pack with the optional streaming graph:
+- 你好，今天的天气不错。
+- 这杯茶已经凉了。
+- 我把昨天整理的资料放在桌面上了，等你有空时，我们一起看一遍。
+- 公交车还有十分钟就到。我们可以沿着这条路先走一段，到站牌旁边等。
 
-```powershell
-cargo run --release --example stream_bench -- ./model-pack ./output cpu
-```
+</details>
 
-#### Host shape input for the native GPT step
+Other measured paths include [ABI-1 CPU and DirectML](docs/performance.md),
+[CUDA GPT](docs/performance-r1.1.md), [CUDA VITS](docs/performance-r1.2.md),
+[native TensorRT GPT](docs/performance-r2.1.md),
+[ABI-2 diffusion](docs/performance-native-diffusion.md) and
+[diffusion scheduling](docs/performance-native-diffusion-scheduling.md).
 
-On the native TensorRT backend, an ABI-1 step graph can take its active KV
-length from a host shape input. Generate a separate graph from the pack's
-original step and set the override before loading the model.
+## Models and runtimes
+
+| Model input | Runtime | Audio delivery |
+| --- | --- | --- |
+| Original v2Pro `.ckpt` and `.pth` | Rust with `raw-checkpoint` and the shared v2Pro frontend | 32 kHz, token chunks |
+| v2Pro ABI-1 pack | Rust and ONNX Runtime | 32 kHz, token chunks with the matching streaming graph |
+| v3, v4, V5 Turbo and V5 Dev ABI-2 packs | Rust schedules GPT, diffusion and vocoding | Text fragments at 24 kHz for v3 and 48 kHz for the others |
+| v1, v2, v2Pro, v2ProPlus, v3, v4, V5 Turbo and V5 Dev checkpoints | Local GPT-SoVITS Python adapter | Streaming mode and sample rate follow the model family |
+
+`alice-tts pack` assembles ABI-1 packs from exported ONNX graphs and accepts
+CMUdict and g2p_en inputs or existing frontend JSON. `pack.json` identifies a
+pack and its reference files. Supply the model weights, frontend assets and
+reference audio separately. ABI-1 token streaming needs its own
+`sovits_stream.onnx` and matching metadata.
+[Pack tools](docs/standalone.md#原生-abi-1-打包) · [Streaming graph exporter](tools/export-native-tts-stream.py) · [ABI-2 guide](docs/native-diffusion.md)
+
+DirectML is available on Windows for compatible ONNX packs. The ORT TensorRT EP
+uses `r1-tensorrt-ep`. Native TensorRT 11 GPT on Windows x64 uses `r2-trt-native`,
+with `r2-trt-native-cuda-vits` for the optional CUDA vocoder.
+[Native TensorRT setup](docs/performance-r2.1.md) · [CUDA vocoder](docs/performance-r2.2.md) · [CUDA text frontend](docs/performance-r2.3.md)
+
+<details>
+<summary>Native TensorRT GPT with a host active-length input</summary>
+
+Generate the step graph from an ABI-1 pack and select it before loading the model.
 
 ```powershell
 python tools/prepare-native-active-len.py ./model-pack/gpt_step.onnx ./target/active-len/gpt_step.onnx
@@ -160,78 +156,24 @@ $env:ALICE_NATIVE_TTS_TRT_CACHE_DIR = Join-Path (Get-Location) 'target/active-le
 cargo run --locked --release --features "r0-profiling r2-trt-native-cuda-vits" --example r0_profile -- ./model-pack ./target/active-len-profile tensor_rt_native --chunks=24 --warmups=5 --repeats=10 --cuda-vits --cuda-vits-allow-cpu
 ```
 
-With the override unset, the runner loads the packed step graph from the
-model directory. The engine cache keys include the model file fingerprint.
+The packed step graph is used by default. Engine caches are keyed by the graph
+fingerprint.
 
-## Model packs
+</details>
 
-An ABI-1 `v2Pro` pack runs at 32 kHz with a 512-token GPT KV capacity.
-A base pack contains the ONNX graphs, frontend data, a reference WAV
-and its transcript, plus a `LICENSES.txt` provenance file. `pack.json` declares
-the ABI and reference files. Optional token streaming also requires
-`sovits_stream.onnx` and the matching streaming metadata.
+### Native frontend and scope
 
-Use `alice-tts pack` (`--features pack-tools`) to assemble an ABI-1 pack from
-compatible exports without starting Python. It accepts the CMUdict text corpus
-and the g2p_en NPZ checkpoint, or existing frontend JSON files. The Python pack
-script remains available. Use `tools/export-native-tts-stream.py` to export and
-parity-check the optional streaming graph. [Pack usage](docs/standalone.md#原生-abi-1-打包)
+The native frontend handles Mandarin and English using batched G2PW and
+GRU-based English G2P. Number, date, time, currency, percentage and temperature
+normalization covers supported display forms. Pronunciation coverage is limited
+for neutral tones, erhua and English homographs that depend on part of speech.
 
-ABI-2 exports v3 at 24 kHz and v4, V5 Turbo and V5 Dev at 48 kHz. Rust drives
-the GPT, target features, diffusion steps and vocoder. An FP32 pack can run on
-CPU. The measured Windows GPU route uses native TensorRT GPT and ONNX Runtime
-CUDA for the acoustic graphs. The [native diffusion guide](docs/native-diffusion.md)
-covers pack preparation, backend selection and reference conditioning.
+ABI-1 uses a 512-token GPT cache, fixed speed 1.0 and zero acoustic noise.
+ABI-2 uses family-specific diffusion settings. Cancellation is cooperative at
+inference boundaries. Hosts own their model sessions and caches. The Project
+Alice desktop adapter manages provider selection, playback and app-level events.
 
-The tools expect model files and source installations to be provided by the
-operator. Read each upstream model's terms and retain its notices in the pack.
-Do not place model weights, a voice reference recording, or generated packs in
-this source repository.
+## License
 
-## API
-
-The crate exports `Config`, `Backend`, `NativeTts`, pack validation, and text
-normalization. A minimal embedding example is in `examples/synthesize.rs`;
-Rust API documentation can be generated with:
-
-```powershell
-cargo doc --open
-```
-
-Alice's desktop integration adapter is maintained in Project Alice and is not
-part of this crate. It handles application provider selection, shared caching,
-event reporting, playback queues, and integration-level cancellation.
-
-## Performance
-
-This is an initial measurement snapshot from one machine, not a cross-device
-benchmark or a performance guarantee. The implementation has not had a
-systematic model-quantization, weight-deduplication, or broad hardware-tuning
-pass. It does include targeted work such as batched pronunciation inference,
-early clause delivery, optional token streaming, and DirectML support.
-
-See [the benchmark notes](docs/performance.md) for hardware, timing definitions,
-results, and reproduction commands.
-For ABI-2, see the [checkpoint comparison](docs/performance-native-diffusion.md)
-and the [scheduling measurements](docs/performance-native-diffusion-scheduling.md).
-
-## Current limits
-
-- Native packs support Mandarin and English.
-- ABI-1 exports fix speed at 1.0 and acoustic noise at 0.0. ABI-2 uses its
-  family-specific step count, noise scale and guidance.
-- The cache in the Alice adapter holds one base voice configuration per
-  process. The crate itself leaves cache ownership to its host.
-- Cancellation is cooperative between ONNX runs; a running ONNX kernel cannot
-  be forcibly interrupted.
-- The frontend does not yet cover Mandarin neutral-tone/erhua behavior,
-  English part-of-speech-dependent homographs, Japanese, or every locale's
-  number grammar.
-- Long inputs are bounded to protect the exported GPT KV cache.
-
-## License and provenance
-
-The crate is distributed under Apache-2.0. Adapted Mandarin pronunciation
-tables, tokenizer data, and pinyin splitting code retain their upstream
-attribution in [NOTICE.md](NOTICE.md). Model-pack components have their own
-provenance and licensing; see the pack's `LICENSES.txt`.
+Apache-2.0. Upstream frontend attribution is recorded in `NOTICE.md`, and model
+pack provenance belongs in each pack’s `LICENSES.txt`. [License](LICENSE) · [Third-party notices](NOTICE.md)

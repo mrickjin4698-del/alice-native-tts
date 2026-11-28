@@ -23,6 +23,41 @@ CUDA 13 与 cuDNN 9 的运行库。模型权重、共享前端和参考音频由
 | GPT-SoVITS v3、v4 checkpoint | 本机 GPT-SoVITS Python 子进程 | 按文本片段输出 |
 | GPT-SoVITS V5 Turbo、V5 Dev checkpoint | 支持 V5 的本机 GPT-SoVITS Python 子进程 | 按文本片段输出 48 kHz PCM |
 
+## 命令行管道
+
+`synthesize` 接收 `--text TEXT` 或 `--text-file FILE`。令 `--text-file -`
+即可从 stdin 读取 UTF-8 文本。子进程调用方写完一条文本后，关闭 stdin 以
+发送 EOF，并持续读取 stdout 和 stderr。
+
+| 选项 | 输出 |
+| --- | --- |
+| `--output ./speech.wav` | 写入新文件，stdout 返回一条 JSON 完成消息。 |
+| `--output -` | stdout 返回完整 WAV。合成结束后填好 WAV 头，再从临时文件发送。 |
+| `--output - --format s16le` | stdout 随模型逐块返回单声道小端 PCM16。 |
+
+`--output -` 的 stdout 是音频字节。诊断走 stderr，失败时进程返回非零退出码。
+`s16le` 每两个小端字节表示一个样本。原生模型的采样率见 `inspect MODEL`
+的 `sample_rate`，v2Pro 直读为 32,000 Hz。需要由运行时确定采样率的模型可用
+WAV 或读取 JSONL `ready.model.sample_rate`。
+
+将 stdout 的 WAV 接入 FFmpeg。`input.txt` 使用 UTF-8 编码。
+
+```powershell
+alice-tts synthesize ./voice.json --text-file ./input.txt --output - |
+  ffmpeg -i pipe:0 ./speech.flac
+```
+
+将 v2Pro 的流式 PCM 接入 FFmpeg。
+
+```powershell
+alice-tts synthesize ./voice.json --text-file ./input.txt --output - --format s16le |
+  ffmpeg -f s16le -ar 32000 -ac 1 -i pipe:0 ./speech.wav
+```
+
+PowerShell 7.4 起，原生命令之间的管道保留音频字节。应用可直接打开子进程的
+二进制 stdout。高频调用可使用常驻 `worker` 或 `serve`，让一次模型加载服务
+多条请求。[PowerShell 二进制重定向](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_redirection#example-7-redirecting-binary-data-from-a-native-command) · [FFmpeg pipe 协议](https://ffmpeg.org/ffmpeg-protocols.html#pipe)
+
 ## 原生 ONNX 模型
 
 沿用已有 ABI-1 包目录。包有流式图时，命令行自动启用流式接口。ABI-2 使用同一套命令和 Rust session 接口，导出及运行依赖见[原生扩散指南](native-diffusion.md)。

@@ -1,3 +1,5 @@
+#[path = "alice-tts/synthesize.rs"]
+mod synthesize;
 #[path = "alice-tts/worker.rs"]
 mod worker;
 
@@ -13,15 +15,14 @@ use alice_native_tts::session::{
 };
 use serde_json::json;
 use std::ffi::OsString;
-use std::fs::{self, OpenOptions};
-use std::io::BufWriter;
 #[cfg(feature = "server")]
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const USAGE: &str = "\
 alice-tts inspect MODEL
-alice-tts synthesize MODEL --text TEXT --output FILE.wav [--language LANG] [RUNTIME OPTIONS]
+alice-tts synthesize MODEL (--text TEXT | --text-file FILE) --output FILE
+                     [--format wav|s16le] [--language LANG] [RUNTIME OPTIONS]
 alice-tts worker MODEL [--warmup-text TEXT] [RUNTIME OPTIONS]
 ";
 
@@ -34,6 +35,10 @@ fn print_usage() {
     print!(
         "
 MODEL is a native ONNX pack directory or a checkpoint manifest JSON file.
+SYNTHESIZE OPTIONS
+  --text-file FILE       Read UTF-8 text. Use - for stdin.
+  --output FILE          Write a new file. Use - for binary stdout.
+  --format wav|s16le     Default wav. Use s16le for streaming PCM.
 RUNTIME OPTIONS
   --device cpu|cuda|directml|tensor_rt|tensor_rt_native   Default cpu
   --gpt-sovits-root DIR   Local GPT-SoVITS installation for checkpoints
@@ -58,14 +63,16 @@ fn string(value: OsString, name: &str) -> SessionResult<String> {
 struct Flags {
     runtime: SessionOptions,
     text: Option<String>,
+    text_file: Option<PathBuf>,
     output: Option<PathBuf>,
+    format: synthesize::Format,
     language: Option<String>,
     warmup: Option<String>,
     #[cfg(feature = "server")]
     bind: Option<SocketAddr>,
 }
 
-fn flags(_command: &str, args: impl IntoIterator<Item = OsString>) -> SessionResult<Flags> {
+fn flags(command: &str, args: impl IntoIterator<Item = OsString>) -> SessionResult<Flags> {
     let mut result = Flags::default();
     let mut args = args.into_iter();
     while let Some(flag) = args.next() {
@@ -82,11 +89,15 @@ fn flags(_command: &str, args: impl IntoIterator<Item = OsString>) -> SessionRes
             "--gpt-sovits-root" => result.runtime.gpt_sovits_root = Some(value.into()),
             "--python" => result.runtime.python = Some(value.into()),
             "--text" => result.text = Some(string(value, "text")?),
+            "--text-file" if command == "synthesize" => result.text_file = Some(value.into()),
             "--output" => result.output = Some(value.into()),
+            "--format" if command == "synthesize" => {
+                result.format = synthesize::Format::parse(&string(value, "format")?)?;
+            }
             "--language" => result.language = Some(string(value, "language")?),
             "--warmup-text" => result.warmup = Some(string(value, "warmup text")?),
             #[cfg(feature = "server")]
-            "--bind" if _command == "serve" => {
+            "--bind" if command == "serve" => {
                 let address = string(value, "bind address")?;
                 result.bind = Some(address.parse().map_err(|_| {
                     invalid("--bind requires an IP address and port, for example 127.0.0.1:8090")
@@ -104,53 +115,6 @@ fn wav_spec(rate: u32) -> hound::WavSpec {
         sample_rate: rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
-    }
-}
-
-fn render(
-    session: &mut Session,
-    text: &str,
-    language: Option<&str>,
-    output: &Path,
-) -> SessionResult<()> {
-    let rate = session
-        .info()
-        .sample_rate
-        .expect("loaded model sample rate");
-    let file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(output)?;
-    let result = (|| {
-        let mut wav = hound::WavWriter::new(BufWriter::new(file), wav_spec(rate))
-            .map_err(alice_native_tts::Error::from)?;
-        let samples = session.synthesize(text, language, &|| false, |pcm| {
-            for &sample in pcm {
-                wav.write_sample(sample)
-                    .map_err(alice_native_tts::Error::from)?;
-            }
-            Ok(())
-        })?;
-        wav.finalize().map_err(alice_native_tts::Error::from)?;
-        Ok(samples)
-    })();
-    match result {
-        Ok(samples) => {
-            println!(
-                "{}",
-                json!({
-                    "type": "done",
-                    "samples": samples,
-                    "sample_rate": rate,
-                    "output": output,
-                })
-            );
-            Ok(())
-        }
-        Err(error) => {
-            let _ = fs::remove_file(output);
-            Err(error)
-        }
     }
 }
 
@@ -180,6 +144,10 @@ fn run() -> SessionResult<()> {
     let path = args
         .next()
         .ok_or_else(|| invalid("a model path is required"))?;
+    if path == "--help" || path == "-h" {
+        print_usage();
+        return Ok(());
+    }
     if command == "inspect" {
         if args.next().is_some() {
             return Err(invalid("inspect takes exactly one model path"));
@@ -192,27 +160,32 @@ fn run() -> SessionResult<()> {
     }
 
     let flags = flags(command, args)?;
-    let model = Model::open(path)?;
     if command == "synthesize" {
         let output = flags
             .output
             .ok_or_else(|| invalid("synthesize requires --output"))?;
-        let text = flags
-            .text
-            .ok_or_else(|| invalid("synthesize requires --text"))?;
         if flags.warmup.is_some() {
             return Err(invalid(
                 "--warmup-text is available in worker and serve modes",
             ));
         }
+        let model = Model::open(path)?;
+        let text = synthesize::read_text(flags.text, flags.text_file)?;
         let mut session = Session::load(model, &flags.runtime, &|| false)?;
-        render(&mut session, &text, flags.language.as_deref(), &output)
+        synthesize::render(
+            &mut session,
+            &text,
+            flags.language.as_deref(),
+            &output,
+            flags.format,
+        )
     } else {
         if flags.text.is_some() || flags.output.is_some() || flags.language.is_some() {
             return Err(invalid(format!(
                 "{command} receives text and language in requests"
             )));
         }
+        let model = Model::open(path)?;
         #[cfg(feature = "server")]
         if command == "serve" {
             return serve::run(
