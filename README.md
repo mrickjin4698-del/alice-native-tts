@@ -19,7 +19,16 @@ warmup, streaming and cancellation. Rust clients can use the same model loader
 and synthesis interface through `alice_native_tts::session`.
 
 See the [standalone guide](docs/standalone.md) for supported checkpoints, model
-manifests, devices, installation and the JSONL protocol.
+manifests, devices, and installation. Build with `--features server` to run
+`alice-tts serve MODEL` and expose [HTTP WAV and WebSocket PCM](docs/standalone.md#http-与-websocket).
+
+For original v2Pro checkpoints, build with `--features raw-checkpoint` and
+set `native_assets` in the model manifest. Rust reads the `.ckpt` and `.pth`
+files directly and uses the shared v2Pro frontend assets. Add `r1-cuda-ep`
+and select `--device cuda` for CUDA inference. Set `"native_precision": "fp16"`
+in the manifest to opt into FP16. The Windows x64 Release archives include
+`pack` and `serve` in both CPU and CUDA builds.
+[Checkpoint setup](docs/standalone.md#v2pro-原始权重直读)
 
 ## Features
 
@@ -162,11 +171,11 @@ and its transcript, plus a `LICENSES.txt` provenance file. `pack.json` declares
 the ABI and reference files. Optional token streaming also requires
 `sovits_stream.onnx` and the matching streaming metadata.
 
-Prepare a pack from local, compatible exports and an existing GPT-SoVITS
-installation with `tools/prepare-native-tts-pack.py`. Python is needed only for
-this offline preparation step; runtime inference is Rust. The optional
-streaming graph is exported and parity-checked with
-`tools/export-native-tts-stream.py`.
+Use `alice-tts pack` (`--features pack-tools`) to assemble an ABI-1 pack from
+compatible exports without starting Python. It accepts the CMUdict text corpus
+and the g2p_en NPZ checkpoint, or existing frontend JSON files. The Python pack
+script remains available. Use `tools/export-native-tts-stream.py` to export and
+parity-check the optional streaming graph. [Pack usage](docs/standalone.md#原生-abi-1-打包)
 
 ABI-2 exports v3 at 24 kHz and v4, V5 Turbo and V5 Dev at 48 kHz. Rust drives
 the GPT, target features, diffusion steps and vocoder. An FP32 pack can run on

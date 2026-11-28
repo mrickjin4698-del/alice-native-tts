@@ -1,6 +1,8 @@
 //! Local GPT-SoVITS synthesis. The native API loads ABI-1 ONNX packs.
-//! The session API also supports checkpoints through a local GPT-SoVITS runtime.
+//! The session API supports direct v2Pro checkpoints and a local GPT-SoVITS runtime.
 mod audio;
+#[cfg(feature = "raw-checkpoint")]
+mod checkpoint_native;
 mod frontend;
 mod inference;
 #[cfg(feature = "r2-trt-native")]

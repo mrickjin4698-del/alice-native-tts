@@ -14,7 +14,15 @@ v2Pro、v2ProPlus、v3、v4、V5 Turbo 和 V5 Dev。
 用 `cargo build --locked --release --bin alice-tts` 构建命令行程序。它支持
 模型检查、WAV 合成和常驻 JSONL 流式服务。Rust 应用可以通过
 `alice_native_tts::session` 访问同一套模型加载和合成接口。使用方法、模型
-清单和进程协议见[独立使用指南](docs/standalone.md)。
+清单和进程协议见[独立使用指南](docs/standalone.md)。启用 `--features server`
+后可运行 `alice-tts serve MODEL`，提供 [HTTP WAV 下载和 WebSocket PCM 流](docs/standalone.md#http-与-websocket)。
+
+启用 `--features raw-checkpoint` 并在清单中指定 `native_assets`，可用 Rust
+直读原始 v2Pro `.ckpt` 和 `.pth`，配套前端资源可跨声线复用。启用
+`r1-cuda-ep` 并选择 `--device cuda` 可使用显卡推理。清单可通过
+`"native_precision": "fp16"` 启用 FP16。Windows x64 的 CPU 与 CUDA 发布包
+均包含 `pack` 和 `serve`。
+[直读用法](docs/standalone.md#v2pro-原始权重直读)
 
 ## 功能
 
@@ -79,10 +87,10 @@ ABI-1 的 `v2Pro` 模型包以 32 kHz 输出，GPT KV 容量为 512 token。
 `LICENSES.txt`。`pack.json` 声明 ABI 和参考文件。启用 token 流式还需
 `sovits_stream.onnx` 以及匹配的流式元数据。
 
-可以使用 `tools/prepare-native-tts-pack.py`，从本地兼容模型导出文件和
-GPT-SoVITS 安装准备模型包。Python 只用于这个离线准备步骤，运行时推理由
-Rust 完成。可选流式图由 `tools/export-native-tts-stream.py` 导出并进行数值
-对齐检查。
+启用 `--features pack-tools` 后，可用 `alice-tts pack` 从现有 ONNX 图组装
+ABI-1 包。它直接读取 CMUdict 文本词典和 g2p_en NPZ 权重，也接受已有的前端
+JSON 文件。原有 Python 打包脚本保留。可选流式图由
+`tools/export-native-tts-stream.py` 导出并进行数值对齐检查。 [打包用法](docs/standalone.md#原生-abi-1-打包)
 
 ABI-2 支持 v3、v4、V5 Turbo 和 V5 Dev。Rust 调度 GPT、目标特征、扩散步和
 声码器，v3 输出 24 kHz，其余输出 48 kHz。Windows 实测路径使用原生 TensorRT

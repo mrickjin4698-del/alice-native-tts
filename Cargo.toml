@@ -13,6 +13,9 @@ categories = ["multimedia::audio"]
 resolver = "2"
 
 [features]
+raw-checkpoint = ["dep:half", "dep:prost", "dep:repugnant-pickle", "dep:zip", "ort/half"]
+pack-tools = ["dep:clap", "dep:ndarray", "dep:ndarray-npy", "dep:sha2", "dep:tempfile"]
+server = ["dep:axum", "dep:tokio"]
 r0-profiling = []
 r1-gpt-step-v2 = []
 r1-r8-preview = []
@@ -24,6 +27,17 @@ r2-trt-native = ["ort/load-dynamic"]
 r2-trt-native-cuda-vits = ["r2-trt-native", "r1-cuda-ep"]
 
 [dependencies]
+half = { version = "2", optional = true }
+prost = { version = "0.14", optional = true }
+repugnant-pickle = { version = "0.0.1", optional = true }
+zip = { version = "6", default-features = false, features = ["deflate"], optional = true }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "ws"], optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+ndarray = { version = "0.17", optional = true }
+ndarray-npy = { version = "0.10", default-features = false, features = ["compressed_npz"], optional = true }
+sha2 = { version = "0.10", optional = true }
+tempfile = { version = "3", optional = true }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"], optional = true }
 base64 = "0.22"
 ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }

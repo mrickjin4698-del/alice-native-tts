@@ -1,0 +1,12 @@
+{
+  "model": {
+    "embedding_dim": 512,
+    "hidden_dim": 512,
+    "head": 16,
+    "n_layer": 24,
+    "linear_units": 2048,
+    "phoneme_vocab_size": 732,
+    "vocab_size": 1025,
+    "EOS": 1024
+  }
+}

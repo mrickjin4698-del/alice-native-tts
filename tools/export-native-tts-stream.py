@@ -17,52 +17,10 @@ os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 
 
-def main():
-    faulthandler.dump_traceback_later(45, repeat=True)
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--source", required=True, type=Path)
-    parser.add_argument("--weights", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
-    args = parser.parse_args()
-    if args.output.exists():
-        raise SystemExit("Refusing to overwrite an existing streaming graph")
-    sys.path[:0] = [str(args.source), str(args.source / "GPT_SoVITS")]
-    print("Loading offline export dependencies", flush=True)
-    import numpy as np
-    import onnxruntime as ort
+def streaming_vits(model):
     import torch
     from torch import nn
     from torch.nn import functional as F
-    from GPT_SoVITS.process_ckpt import load_sovits_new, get_sovits_version_from_path_fast
-    from GPT_SoVITS.module.models import SynthesizerTrn
-
-    torch.set_num_threads(4)
-    torch.set_grad_enabled(False)
-    print("Loading SoVITS weights", flush=True)
-    saved = load_sovits_new(str(args.weights))
-    def as_dict(value):
-        if isinstance(value, dict): return {k:as_dict(v) for k,v in value.items()}
-        if isinstance(value, (list,tuple)): return [as_dict(v) for v in value]
-        if hasattr(value, "__dict__"): return {k:as_dict(v) for k,v in vars(value).items()}
-        return value
-    config = as_dict(saved["config"])
-    _, version, _ = get_sovits_version_from_path_fast(str(args.weights))
-    if version not in ("v2Pro", "v2ProPlus") or config["data"]["sampling_rate"] != 32000:
-        raise SystemExit("Requires ABI-1 compatible v2Pro or v2ProPlus 32 kHz weights")
-    config["model"].update(version=version, semantic_frame_rate="25hz")
-    model = SynthesizerTrn(config["data"]["filter_length"] // 2 + 1,
-                           config["train"]["segment_size"] // config["data"]["hop_length"],
-                           n_speakers=config["data"]["n_speakers"], **config["model"])
-    model.load_state_dict(saved["weight"], strict=False)
-    model.eval()
-    for module in model.modules():
-        if "EuclideanCodebook" in type(module).__name__:
-            import types
-            module.init_embed_ = types.MethodType(lambda self, data: None, module)
-    channels = config["model"]["hidden_channels"]
-    samples_per_token = math.prod(config["model"]["upsample_rates"]) * 2
-    if channels != 192 or samples_per_token != 1280:
-        raise SystemExit("Unsupported streaming latent/audio dimensions")
 
     class StreamingVits(nn.Module):
         def __init__(self):
@@ -99,7 +57,55 @@ def main():
             audio = m.dec(z * latent_mask, g=ge)
             return audio, latent
 
-    wrapper = StreamingVits().eval()
+    return StreamingVits().eval()
+
+
+def main():
+    faulthandler.dump_traceback_later(45, repeat=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--weights", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    args = parser.parse_args()
+    if args.output.exists():
+        raise SystemExit("Refusing to overwrite an existing streaming graph")
+    sys.path[:0] = [str(args.source), str(args.source / "GPT_SoVITS")]
+    print("Loading offline export dependencies", flush=True)
+    import numpy as np
+    import onnxruntime as ort
+    import torch
+    from GPT_SoVITS.process_ckpt import load_sovits_new, get_sovits_version_from_path_fast
+    from GPT_SoVITS.module.models import SynthesizerTrn
+
+    torch.set_num_threads(4)
+    torch.set_grad_enabled(False)
+    print("Loading SoVITS weights", flush=True)
+    saved = load_sovits_new(str(args.weights))
+    def as_dict(value):
+        if isinstance(value, dict): return {k:as_dict(v) for k,v in value.items()}
+        if isinstance(value, (list,tuple)): return [as_dict(v) for v in value]
+        if hasattr(value, "__dict__"): return {k:as_dict(v) for k,v in vars(value).items()}
+        return value
+    config = as_dict(saved["config"])
+    _, version, _ = get_sovits_version_from_path_fast(str(args.weights))
+    if version not in ("v2Pro", "v2ProPlus") or config["data"]["sampling_rate"] != 32000:
+        raise SystemExit("Requires ABI-1 compatible v2Pro or v2ProPlus 32 kHz weights")
+    config["model"].update(version=version, semantic_frame_rate="25hz")
+    model = SynthesizerTrn(config["data"]["filter_length"] // 2 + 1,
+                           config["train"]["segment_size"] // config["data"]["hop_length"],
+                           n_speakers=config["data"]["n_speakers"], **config["model"])
+    model.load_state_dict(saved["weight"], strict=False)
+    model.eval()
+    for module in model.modules():
+        if "EuclideanCodebook" in type(module).__name__:
+            import types
+            module.init_embed_ = types.MethodType(lambda self, data: None, module)
+    channels = config["model"]["hidden_channels"]
+    samples_per_token = math.prod(config["model"]["upsample_rates"]) * 2
+    if channels != 192 or samples_per_token != 1280:
+        raise SystemExit("Unsupported streaming latent/audio dimensions")
+
+    wrapper = streaming_vits(model)
     generator = torch.Generator().manual_seed(20261003)
     codes = torch.randint(0, 1024, (1, 1, 48), generator=generator)
     phones = torch.randint(0, 100, (1, 32), generator=generator)

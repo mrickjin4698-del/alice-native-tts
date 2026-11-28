@@ -4,6 +4,7 @@
 /output/
 *.wav
 *.onnx
+!/src/checkpoint_native/graphs/*.onnx
 *.ckpt
 *.pth
 *.safetensors

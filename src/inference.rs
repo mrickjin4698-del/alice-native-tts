@@ -171,7 +171,11 @@ pub(crate) fn open_on(dir: &Path, name: &str, backend: Backend) -> Result<Sessio
 
 // Experimental bounded cache: one extra session dedicated to the ordinary
 // 24-token first chunk. Models, tensor shapes and audio output stay unchanged.
-fn open_first_vits(dir: &Path, streaming: bool, backend: Backend) -> Result<Option<Session>> {
+fn open_first_vits(
+    streaming: bool,
+    backend: Backend,
+    open: impl FnOnce() -> Result<Session>,
+) -> Result<Option<Session>> {
     #[cfg(feature = "r1-cuda-ep")]
     if streaming
         && backend == Backend::Cuda
@@ -180,13 +184,31 @@ fn open_first_vits(dir: &Path, streaming: bool, backend: Backend) -> Result<Opti
             .as_deref()
             == Some("1")
     {
-        return Ok(Some(open_on(dir, "sovits_stream", backend)?));
+        return open().map(Some);
     }
-    let _ = (dir, streaming, backend);
+    let _ = (streaming, backend, open);
     Ok(None)
 }
 
 fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
+    #[cfg(feature = "r2-0-first-audible")]
+    if std::env::var("ALICE_NATIVE_TTS_LOAD_TRACE").ok().as_deref() == Some("1") {
+        let bytes = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        eprintln!("[alice-native-tts load] SESSION name={name} backend={backend:?} bytes={bytes}");
+    }
+    open_graph(name, backend, false, |mut builder| {
+        builder
+            .commit_from_file(path)
+            .map_err(|e| invalid(e.to_string()))
+    })
+}
+
+fn open_graph(
+    name: &str,
+    backend: Backend,
+    allow_cpu_helpers: bool,
+    commit: impl FnOnce(ort::session::builder::SessionBuilder) -> Result<Session>,
+) -> Result<Session> {
     let _load_trace = match name {
         "bert" => Some(LoadTrace::begin("session:bert")),
         "g2pw" => Some(LoadTrace::begin("session:g2pw")),
@@ -201,11 +223,6 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
         "sovits_stream" => Some(LoadTrace::begin("session:sovits_stream")),
         _ => None,
     };
-    #[cfg(feature = "r2-0-first-audible")]
-    if std::env::var("ALICE_NATIVE_TTS_LOAD_TRACE").ok().as_deref() == Some("1") {
-        let bytes = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
-        eprintln!("[alice-native-tts load] SESSION name={name} backend={backend:?} bytes={bytes}");
-    }
     #[allow(unused_mut)]
     let mut strict_gpu_placement = false;
     #[allow(unused_variables)]
@@ -371,6 +388,7 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
             ])
             .map_err(|e| invalid(e.to_string()))?;
     }
+    let strict_gpu_placement = strict_gpu_placement && !allow_cpu_helpers;
     if strict_gpu_placement {
         builder = builder
             .with_disable_cpu_fallback()
@@ -383,13 +401,13 @@ fn open_path(path: &Path, name: &str, backend: Backend) -> Result<Session> {
             .map_err(|e| invalid(e.to_string()))?;
     }
     let _trace = LoadTrace::begin("ort_commit_from_file");
-    let result = builder.commit_from_file(path).map_err(|error| {
+    let result = commit(builder).map_err(|error| {
         if strict_gpu_placement {
             invalid(format!(
                 "strict GPU placement rejected CPU-assigned nodes in {name}: {error}"
             ))
         } else {
-            invalid(error.to_string())
+            error
         }
     });
     drop(_trace);
@@ -1090,7 +1108,54 @@ pub struct NativeTts {
     ort_profiling: bool,
 }
 
+enum VoiceSource {
+    Pack,
+    #[cfg(feature = "raw-checkpoint")]
+    Checkpoint(Box<crate::checkpoint_native::VoiceGraphs>),
+}
+
+impl VoiceSource {
+    fn open(
+        &mut self,
+        dir: &Path,
+        name: &str,
+        backend: Backend,
+        _cancel: &impl Fn() -> bool,
+    ) -> Result<Session> {
+        match self {
+            Self::Pack => open_on(dir, name, backend),
+            #[cfg(feature = "raw-checkpoint")]
+            Self::Checkpoint(graphs) => {
+                // CUDA handles encoder and vocoder math, with CPU placement for
+                // shape helpers. The autoregressive step remains strict.
+                let allow_cpu_helpers = matches!(name, "gpt_encoder" | "sovits_stream");
+                open_graph(name, backend, allow_cpu_helpers, |builder| {
+                    graphs.session(name, builder, _cancel)
+                })
+            }
+        }
+    }
+
+    fn open_step(
+        &mut self,
+        dir: &Path,
+        backend: Backend,
+        _cancel: &impl Fn() -> bool,
+    ) -> Result<(Session, GptStepCacheLayout)> {
+        match self {
+            Self::Pack => open_step(dir, backend),
+            #[cfg(feature = "raw-checkpoint")]
+            Self::Checkpoint(_) => Ok((
+                self.open(dir, "gpt_step", backend, _cancel)?,
+                GptStepCacheLayout::Abi1Packed,
+            )),
+        }
+    }
+}
+
 impl NativeTts {
+    pub(crate) const MAX_TEXT_CHARS: usize = 180;
+
     fn native_trt_gpt_active(&self) -> bool {
         #[cfg(feature = "r2-trt-native")]
         {
@@ -1137,7 +1202,53 @@ impl NativeTts {
             .reference_text
             .as_deref()
             .unwrap_or(&pack.reference_text);
-        let (wav16, wav32) = audio::reference(&reference_path)?;
+        drop(_trace);
+        Self::load_resolved(
+            config,
+            &reference_path,
+            reference_text,
+            VoiceSource::Pack,
+            cancel,
+        )
+    }
+
+    #[cfg(feature = "raw-checkpoint")]
+    pub(crate) fn load_checkpoint(
+        config: &Config,
+        gpt: &Path,
+        sovits: &Path,
+        precision: crate::session::NativePrecision,
+        cancel: &impl Fn() -> bool,
+    ) -> Result<Self> {
+        let (Some(reference), Some(transcript)) = (
+            config.reference_audio.as_deref(),
+            config.reference_text.as_deref(),
+        ) else {
+            return Err(invalid(
+                "checkpoint requires a reference WAV and transcript",
+            ));
+        };
+        let graphs = crate::checkpoint_native::VoiceGraphs::open(gpt, sovits, precision, cancel)?;
+        Self::load_resolved(
+            config,
+            reference,
+            transcript,
+            VoiceSource::Checkpoint(Box::new(graphs)),
+            cancel,
+        )
+    }
+
+    fn load_resolved(
+        config: &Config,
+        reference_path: &Path,
+        reference_text: &str,
+        mut voice: VoiceSource,
+        cancel: &impl Fn() -> bool,
+    ) -> Result<Self> {
+        let dir = &config.model_dir;
+        check(cancel)?;
+        let _trace = LoadTrace::begin("read_reference_audio");
+        let (wav16, wav32) = audio::reference(reference_path)?;
         drop(_trace);
         let frontend_backend = non_gpt_backend(config.backend);
         let frontend_session_backend = frontend_execution_backend(config.backend)?;
@@ -1146,6 +1257,9 @@ impl NativeTts {
         #[cfg(not(feature = "r2-trt-native"))]
         let native_trt_enabled = false;
         let cuda_vits = cuda_vits_requested(config.backend);
+        #[cfg(all(feature = "raw-checkpoint", feature = "r1-cuda-ep"))]
+        let cuda_vits = cuda_vits
+            || (matches!(&voice, VoiceSource::Checkpoint(_)) && config.backend == Backend::Cuda);
         let vocoder_backend = if cuda_vits && config.streaming {
             #[cfg(feature = "r1-cuda-ep")]
             {
@@ -1168,7 +1282,7 @@ impl NativeTts {
         let _trace = LoadTrace::begin("reference_cpu_session_load");
         let mut ssl = open(dir, "ssl")?;
         check(cancel)?;
-        let mut vq = open(dir, "vq_encoder")?;
+        let mut vq = voice.open(dir, "vq_encoder", Backend::Cpu, cancel)?;
         check(cancel)?;
         let mut spectrogram = open(dir, "spectrogram")?;
         check(cancel)?;
@@ -1226,11 +1340,11 @@ impl NativeTts {
         } else {
             let encoder_backend = gpt_backend(config.backend);
             let _trace = LoadTrace::begin("gpt_encoder_session_load");
-            let enc = open_on(dir, "gpt_encoder", encoder_backend)?;
+            let enc = voice.open(dir, "gpt_encoder", encoder_backend, cancel)?;
             drop(_trace);
             check(cancel)?;
             let _trace = LoadTrace::begin("gpt_step_session_load");
-            let (step, step_cache_layout) = open_step(dir, config.backend)?;
+            let (step, step_cache_layout) = voice.open_step(dir, config.backend, cancel)?;
             drop(_trace);
             (Some(enc), Some(step), step_cache_layout)
         };
@@ -1298,7 +1412,7 @@ impl NativeTts {
         drop(_trace);
         check(cancel)?;
         let _trace = LoadTrace::begin("vits_session_load");
-        let sovits = open_on(
+        let sovits = voice.open(
             dir,
             if config.streaming {
                 "sovits_stream"
@@ -1306,10 +1420,13 @@ impl NativeTts {
                 "sovits"
             },
             vocoder_backend,
+            cancel,
         )?;
         drop(_trace);
         check(cancel)?;
-        let first_sovits = open_first_vits(dir, config.streaming, vocoder_backend)?;
+        let first_sovits = open_first_vits(config.streaming, vocoder_backend, || {
+            voice.open(dir, "sovits_stream", vocoder_backend, cancel)
+        })?;
         check(cancel)?;
         if reference_phones.len() + prompt_tokens + 32 >= 512 {
             return Err(invalid("reference exceeds KV cache budget"));
@@ -1404,7 +1521,9 @@ impl NativeTts {
             next_backend,
         )?;
         check(cancel)?;
-        let next_first = open_first_vits(&self.model_dir, enabled, next_backend)?;
+        let next_first = open_first_vits(enabled, next_backend, || {
+            open_on(&self.model_dir, "sovits_stream", next_backend)
+        })?;
         check(cancel)?;
         self.sovits = next;
         self.first_sovits = next_first;
@@ -1629,8 +1748,11 @@ impl NativeTts {
         mut emit: impl FnMut(&[f32], ChunkInfo),
     ) -> Result<SynthesisTimings> {
         check(cancel)?;
-        if text.chars().count() > 180 {
-            return Err(invalid("native TTS sentence exceeds 180 characters"));
+        if text.chars().count() > Self::MAX_TEXT_CHARS {
+            return Err(invalid(format!(
+                "native TTS sentence exceeds {} characters",
+                Self::MAX_TEXT_CHARS
+            )));
         }
         let started = Instant::now();
         let (phones, features) = profile
